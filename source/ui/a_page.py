@@ -3,7 +3,7 @@ from tkinter import ttk, filedialog
 from pathlib import Path
 from datetime import datetime
 from util import config, logger
-from app.pck_service import load_pcks as app_load_pcks
+from app.pck_manage import load_pcks as manage_load_pcks
 
 
 def build(parent):
@@ -74,36 +74,13 @@ def build(parent):
     vscroll.pack(side="right", fill="y")
     tree.pack(fill="both", expand=True, side="left")
 
-    def load_pcks():
-        # 앱 서비스에 로딩을 위임하고 결과를 트리에 표시합니다
-        folder, pck_files = app_load_pcks()
-        path_var.set(str(folder))
-
-        # 트리 초기화
-        for iid in tree.get_children():
-            tree.delete(iid)
-
-        if not pck_files:
-            logger.log("PCK", f"{folder}에서 .pck 파일을 찾을 수 없습니다")
-            return
-
-        logger.log("PCK", f"{folder}에서 {len(pck_files)}개의 .pck 파일을 찾았습니다:")
-        for f in pck_files:
-            # 파일 정보 가져오기
-            try:
-                st = f.stat()
-                size = st.st_size
-                modified = datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
-            except Exception:
-                size = 0
-                modified = ""
-            tree.insert("", "end", values=(f.name, str(size), modified))
+    # load_pcks 동작은 앱 계층으로 이동했으므로 버튼은 그 함수를 호출합니다
 
     # Button 1: PCK 읽어오기
-    btn1 = ttk.Button(left, text="PCK 읽어오기", command=load_pcks)
+    btn1 = ttk.Button(left, text="PCK 읽어오기", command=lambda: manage_load_pcks(tree, path_var))
     btn1.pack(fill="x", pady=4)
 
-    # Remaining placeholder buttons
+    # Remaining placeholder buttons (버튼 2~6)
     for i in range(2, 7):
         btn = ttk.Button(left, text=f"버튼 {i}")
         btn.pack(fill="x", pady=4)

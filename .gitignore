@@ -130,3 +130,6 @@ Desktop.ini
 
 # User Config File
 config.ini
+
+# Mapping Data Files
+data/
