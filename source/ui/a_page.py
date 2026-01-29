@@ -1,20 +1,32 @@
 import tkinter as tk
 from tkinter import ttk, filedialog
+from pathlib import Path
+from util import config
 
 
 def build(parent):
     top = ttk.Frame(parent)
     top.pack(fill="x", padx=6, pady=6)
+    # ensure config exists and load last used path
+    config.ensure_config()
 
-    ttk.Label(top, text="경로:").pack(side="left")
     path_var = tk.StringVar()
-    entry = ttk.Entry(top, textvariable=path_var)
+    # show the path but make it not editable
+    entry = ttk.Entry(top, textvariable=path_var, state="disabled")
     entry.pack(side="left", fill="x", expand=True, padx=(4, 4))
 
     def browse():
-        p = filedialog.askdirectory()
+        # use last saved path as initial directory if available
+        last = config.get_str("ui", "last_path", fallback="")
+        if last and Path(last).exists():
+            initial = last
+        else:
+            # default to program execution directory when no valid last path
+            initial = str(Path.cwd())
+        p = filedialog.askdirectory(initialdir=initial)
         if p:
             path_var.set(p)
+            config.set_str("ui", "last_path", p)
 
     ttk.Button(top, text="찾아보기", command=browse).pack(side="right")
 
