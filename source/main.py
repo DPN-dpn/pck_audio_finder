@@ -4,8 +4,14 @@ from ui.layout import build_layout
 from ui import a_page, b_page
 from util import logger
 
+# Ensure bundled third-party tools are present (download if missing)
+from util.lib_installer import ensure_libs
+
 
 def run():
+    # download required libs if missing (non-blocking could be added later)
+    ensure_libs()
+
     root = tk.Tk()
     root.title("PCK Audio Finder")
     root.geometry("900x650")
