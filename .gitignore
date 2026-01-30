@@ -128,8 +128,7 @@ Desktop.ini
 .env.local
 .env.*.local
 
-# User Config File
+# User Files
 config.ini
-
-# Mapping Data Files
 data/
+temp/

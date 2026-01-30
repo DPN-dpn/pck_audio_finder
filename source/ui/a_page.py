@@ -3,7 +3,7 @@ from tkinter import ttk, filedialog
 from pathlib import Path
 from datetime import datetime
 from util import config, logger
-from app.pck_manage import load_pcks as manage_load_pcks
+from app.pck_manage import load_pcks as manage_load_pcks, copy_selected_pcks_to_temp
 
 
 def build(parent):
@@ -80,9 +80,22 @@ def build(parent):
     btn1 = ttk.Button(left, text="PCK 읽어오기", command=lambda: manage_load_pcks(tree, path_var))
     btn1.pack(fill="x", pady=4)
 
-    # Remaining placeholder buttons (버튼 2~6)
+    def extract_wav():
+        dest, copied = copy_selected_pcks_to_temp(tree, path_var)
+        if not copied:
+            logger.log("UI", "복사할 PCK 파일이 없습니다")
+            return
+        # WAV 추출 동작을 비우고, 선택된 PCK 파일들을 temp/input_pck로 복제만 수행합니다
+        logger.log("UI", f"PCK 파일을 복제했습니다: {dest}")
+        for n in copied:
+            logger.log("UI", f"  {n}")
+
+    # Button 2: WAV 추출
     for i in range(2, 7):
-        btn = ttk.Button(left, text=f"버튼 {i}")
+        if i == 2:
+            btn = ttk.Button(left, text="WAV 추출", command=extract_wav)
+        else:
+            btn = ttk.Button(left, text=f"버튼 {i}")
         btn.pack(fill="x", pady=4)
 
     # (기존 작업 영역 트리뷰로 대체되어 자리표시 라벨는 제거됨)

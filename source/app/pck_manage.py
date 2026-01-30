@@ -1,6 +1,7 @@
 from pathlib import Path
 from datetime import datetime
 from util import logger, config
+import shutil
 
 
 """앱 레벨의 PCK 관리기능 — 단순화 버전.
@@ -61,4 +62,54 @@ def load_pcks(tree, path_var) -> None:
         except Exception:
             # 트리 삽입 실패해도 계속
             pass
+
+
+def copy_selected_pcks_to_temp(tree, path_var) -> tuple:
+    """선택된(또는 트리에 로드된) PCK 파일들을 시스템 임시 폴더 아래
+    `pck_audio_finder_temp/input_pck`로 복사합니다. 기존 내용을 삭제하고 새로 복사합니다.
+
+    반환: (input_pck_path, [filenames])
+    """
+    try:
+        src_folder = Path(path_var.get()) if path_var and path_var.get() else Path.cwd()
+    except Exception:
+        src_folder = Path.cwd()
+
+    # use project's temp folder (workspace_root/temp/input_pck)
+    try:
+        workspace_root = Path(__file__).resolve().parents[2]
+    except Exception:
+        workspace_root = Path.cwd()
+    temp_root = workspace_root / 'temp'
+    input_pck_dir = temp_root / 'input_pck'
+    # remove previous input_pck contents only
+    if input_pck_dir.exists():
+        try:
+            shutil.rmtree(input_pck_dir)
+        except Exception:
+            pass
+    input_pck_dir.mkdir(parents=True, exist_ok=True)
+
+    items = tree.selection()
+    if not items:
+        items = tree.get_children()
+
+    copied = []
+    for iid in items:
+        try:
+            vals = tree.item(iid).get('values') or ()
+            name = vals[0] if vals else None
+            if not name:
+                continue
+            src = src_folder / name
+            if src.exists() and src.is_file():
+                shutil.copy2(src, input_pck_dir / src.name)
+                copied.append(src.name)
+            else:
+                logger.log("PCK", f"파일이 존재하지 않음: {src}")
+        except Exception as e:
+            logger.log("PCK", f"복사 실패: {e}")
+
+    logger.log("PCK", f"{input_pck_dir}으로 {len(copied)}개 파일을 복사했습니다")
+    return (str(input_pck_dir), copied)
 
