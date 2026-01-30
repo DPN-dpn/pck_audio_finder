@@ -3,7 +3,7 @@ from tkinter import ttk, filedialog
 from pathlib import Path
 from datetime import datetime
 from util import config, logger
-from app.pck_manage import load_pcks as manage_load_pcks, copy_selected_pcks_to_temp, unpack_copied_pcks_to_data, browse as manage_browse, extract_wav as manage_extract_wav
+from app.pck_manage import load_pcks as manage_load_pcks, copy_selected_pcks_to_temp, unpack_copied_pcks_to_data
 
 
 def build(parent):
@@ -24,7 +24,26 @@ def build(parent):
     else:
         path_var.set(str(Path.cwd()))
 
-    ttk.Button(top, text="찾아보기", command=lambda: manage_browse(tree, path_var)).pack(side="right")
+    def browse():
+        # 저장된 마지막 경로가 유효하면 초기 디렉터리로 사용
+        last = config.get_str("ui", "last_path", fallback="")
+        if last and Path(last).exists():
+            initial = last
+        else:
+            initial = str(Path.cwd())
+        p = filedialog.askdirectory(initialdir=initial)
+        if p:
+            path_var.set(p)
+            config.set_str("ui", "last_path", p)
+            # 트리 초기화
+            try:
+                for iid in tree.get_children():
+                    tree.delete(iid)
+            except Exception:
+                pass
+            logger.log("UI", f"경로를 변경하여 로드된 데이터를 초기화했습니다: {p}")
+
+    ttk.Button(top, text="찾아보기", command=browse).pack(side="right")
 
     middle = ttk.Frame(parent)
     middle.pack(fill="both", expand=True, padx=6, pady=(0, 6))
@@ -39,12 +58,13 @@ def build(parent):
     tree_frame = ttk.Frame(right)
     tree_frame.pack(fill="both", expand=True)
 
-    cols = ("name", "size", "modified")
-    tree = ttk.Treeview(tree_frame, columns=cols, show="headings")
-    tree.heading("name", text="이름")
+    cols = ("size", "modified")
+    # show tree column (#0) so expand/collapse icons appear, and keep headings for other cols
+    tree = ttk.Treeview(tree_frame, columns=cols, show="tree headings")
+    tree.heading("#0", text="이름")
     tree.heading("size", text="크기")
     tree.heading("modified", text="수정일")
-    tree.column("name", anchor="w")
+    tree.column("#0", anchor="w", width=240)
     tree.column("size", width=100, anchor="e")
     tree.column("modified", width=160, anchor="center")
 
@@ -56,15 +76,122 @@ def build(parent):
     # load_pcks 동작은 앱 계층으로 이동했으므로 버튼은 그 함수를 호출합니다
 
     # Button 1: PCK 읽어오기
-    btn1 = ttk.Button(left, text="PCK 읽어오기", command=lambda: manage_load_pcks(tree, path_var))
+    def load_and_populate():
+        folder = path_var.get() if path_var and path_var.get() else None
+        entries = manage_load_pcks(folder)
+        # clear existing
+        try:
+            for iid in tree.get_children():
+                tree.delete(iid)
+        except Exception:
+            pass
+        for e in entries:
+            try:
+                tree.insert("", "end", text=e['name'], values=(str(e['size']), e['modified']))
+            except Exception:
+                pass
+
+    btn1 = ttk.Button(left, text="PCK 읽어오기", command=load_and_populate)
     btn1.pack(fill="x", pady=4)
 
-    # extract_wav 기능은 앱 계층으로 이동했음; 버튼은 그 함수를 호출합니다
+    def extract_wav():
+        # determine source folder
+        try:
+            src_folder = Path(path_var.get()) if path_var and path_var.get() else Path.cwd()
+        except Exception:
+            src_folder = Path.cwd()
 
-    # Button 2: WAV 추출
+        # gather selection (PCK names)
+        items = tree.selection()
+        if not items:
+            items = tree.get_children()
+        names = []
+        for iid in items:
+            try:
+                it = tree.item(iid)
+                name = it.get('text') or (it.get('values') or [None])[0]
+                if name:
+                    names.append(name)
+            except Exception:
+                continue
+
+        if not names:
+            logger.log("UI", "복사할 PCK 파일이 없습니다")
+            return
+
+        dest, copied = copy_selected_pcks_to_temp(str(src_folder), names)
+        if not copied:
+            logger.log("UI", "복사된 파일이 없습니다")
+            return
+        logger.log("UI", f"PCK 파일을 복제했습니다: {dest}")
+        for n in copied:
+            logger.log("UI", f"  {n}")
+
+        try:
+            jsons = unpack_copied_pcks_to_data(dest, copied)
+            if not jsons:
+                logger.log("UI", "언팩 또는 JSON 생성된 항목이 없습니다")
+                return
+            logger.log("UI", "언팩 및 JSON 생성 완료:")
+            for j in jsons:
+                logger.log("UI", f"  {j}")
+
+            # update tree: attach unpacked children under each PCK item
+            workspace_root = Path(__file__).resolve().parents[2]
+            data_root = workspace_root / 'data'
+            for name in copied:
+                # find tree item whose text matches the pck filename
+                target_iid = None
+                for iid in tree.get_children():
+                    try:
+                        it = tree.item(iid)
+                        if it.get('text') == name:
+                            target_iid = iid
+                            break
+                    except Exception:
+                        continue
+                if not target_iid:
+                    continue
+
+                # remove existing children
+                try:
+                    for child in tree.get_children(target_iid):
+                        tree.delete(child)
+                except Exception:
+                    pass
+
+                unpack_dir = data_root / (Path(name).stem + '_unpacked')
+                if not unpack_dir.exists():
+                    continue
+
+                # add root files
+                for p in sorted(unpack_dir.iterdir()):
+                    if p.is_file():
+                        try:
+                            tree.insert(target_iid, 'end', text=p.name, values=(str(p.stat().st_size), datetime.fromtimestamp(p.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S')))
+                        except Exception:
+                            pass
+
+                # add bnk folders
+                for child in sorted(unpack_dir.iterdir()):
+                    if child.is_dir() and child.name.lower().endswith('_bnk'):
+                        try:
+                            folder_iid = tree.insert(target_iid, 'end', text=child.name + '/', values=('', ''))
+                            for file in sorted(child.rglob('*')):
+                                if file.is_file():
+                                    try:
+                                        rel = file.relative_to(child)
+                                        tree.insert(folder_iid, 'end', text=str(rel), values=(str(file.stat().st_size), datetime.fromtimestamp(file.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S')))
+                                    except Exception:
+                                        pass
+                        except Exception:
+                            pass
+        except Exception as e:
+            logger.log("UI", f"언팩 처리 중 오류: {e}")
+
     for i in range(2, 7):
         if i == 2:
-            btn = ttk.Button(left, text="WAV 추출", command=lambda: manage_extract_wav(tree, path_var))
+            btn = ttk.Button(left, text="WAV 추출", command=extract_wav)
         else:
             btn = ttk.Button(left, text=f"버튼 {i}")
         btn.pack(fill="x", pady=4)
