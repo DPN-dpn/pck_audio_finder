@@ -110,35 +110,41 @@ def unpack_copied_pcks_to_data(temp_input_dir: str, filenames: list) -> list:
     for name in filenames:
         try:
             src = Path(temp_input_dir) / name
-            if not src.exists():
-                logger.log('PCK', f'언팩 실패, 파일 없음: {src}')
-                continue
+            target = data_dir / (Path(name).stem + '_unpacked')
 
-            # unpack 함수를 동적으로 import (앱의 unpack.py 사용)
-            try:
-                from app.unpack import extract_pck_file
-            except Exception:
-                from unpack import extract_pck_file
-
-            rc = extract_pck_file(str(src))
-            if rc != 0:
-                logger.log('PCK', f'언팩 실패 코드 {rc}: {src.name}')
-                continue
-
-            # 원래 언팩 경로는 pck 파일과 같은 폴더에 생성됨
-            unpacked = src.parent / (src.stem + '_unpacked')
-            target = data_dir / (src.stem + '_unpacked')
-
-            # 이동: 기존 대상이 있으면 삭제 후 이동
+            # If target unpacked folder already exists in data, treat as already extracted
             if target.exists():
+                logger.log('PCK', f'이미 언팩된 폴더가 존재하여 언팩을 건너뜁니다: {target}')
+            else:
+                # ensure source exists before attempting unpack
+                if not src.exists():
+                    logger.log('PCK', f'언팩 실패, 파일 없음: {src}')
+                    continue
+
+                # unpack 함수를 동적으로 import (앱의 unpack.py 사용)
                 try:
-                    shutil.rmtree(target)
+                    from app.unpack import extract_pck_file
                 except Exception:
-                    pass
-            try:
-                shutil.move(str(unpacked), str(target))
-            except Exception as e:
-                logger.log('PCK', f'언팩 결과 이동 실패: {e}')
+                    from unpack import extract_pck_file
+
+                rc = extract_pck_file(str(src))
+                if rc != 0:
+                    logger.log('PCK', f'언팩 실패 코드 {rc}: {src.name}')
+                    continue
+
+                # 원래 언팩 경로는 pck 파일과 같은 폴더에 생성됨
+                unpacked = src.parent / (src.stem + '_unpacked')
+
+                # 이동: 기존 대상이 있으면 삭제 후 이동
+                if target.exists():
+                    try:
+                        shutil.rmtree(target)
+                    except Exception:
+                        pass
+                try:
+                    shutil.move(str(unpacked), str(target))
+                except Exception as e:
+                    logger.log('PCK', f'언팩 결과 이동 실패: {e}')
 
             # 구조 수집: BNK 폴더 목록과 루트의 WEM 파일
             bnk_infos = []
