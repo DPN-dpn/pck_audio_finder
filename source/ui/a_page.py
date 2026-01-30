@@ -2,48 +2,21 @@ import tkinter as tk
 from tkinter import ttk, filedialog
 from pathlib import Path
 from datetime import datetime
-from util import config, logger
-from app.pck_manage import load_pcks as manage_load_pcks, copy_selected_pcks_to_temp, unpack_copied_pcks_to_data
+from util import logger
+from app.pck_manage import load_pcks as manage_load_pcks, unpack_copied_pcks_to_data
 
 
 def build(parent):
     top = ttk.Frame(parent)
     top.pack(fill="x", padx=6, pady=6)
-    # 설정 파일이 존재하는지 확인하고 마지막 사용 경로를 로드합니다
-    config.ensure_config()
-
-    path_var = tk.StringVar()
-    # 경로를 표시하되 사용자가 편집하지 못하도록 설정합니다
-    entry = ttk.Entry(top, textvariable=path_var, state="disabled")
-    entry.pack(side="left", fill="x", expand=True, padx=(4, 4))
-
-    # 엔트리에 마지막으로 설정된 경로 또는 실행 디렉터리를 채웁니다
-    last = config.get_str("ui", "last_path", fallback="")
-    if last and Path(last).exists():
-        path_var.set(last)
-    else:
-        path_var.set(str(Path.cwd()))
-
-    def browse():
-        # 저장된 마지막 경로가 유효하면 초기 디렉터리로 사용
-        last = config.get_str("ui", "last_path", fallback="")
-        if last and Path(last).exists():
-            initial = last
-        else:
-            initial = str(Path.cwd())
-        p = filedialog.askdirectory(initialdir=initial)
-        if p:
-            path_var.set(p)
-            config.set_str("ui", "last_path", p)
-            # 트리 초기화
-            try:
-                for iid in tree.get_children():
-                    tree.delete(iid)
-            except Exception:
-                pass
-            logger.log("UI", f"경로를 변경하여 로드된 데이터를 초기화했습니다: {p}")
-
-    ttk.Button(top, text="찾아보기", command=browse).pack(side="right")
+    # 경로 설정 UI 제거: 프로그램 내부의 input_pck 고정 경로 사용
+    # 프로그램 시작 시 input_pck 폴더가 없으면 생성
+    try:
+        workspace_root = Path(__file__).resolve().parents[2]
+        startup_input = workspace_root / 'input_pck'
+        startup_input.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
 
     middle = ttk.Frame(parent)
     middle.pack(fill="both", expand=True, padx=6, pady=(0, 6))
@@ -77,8 +50,7 @@ def build(parent):
 
     # Button 1: PCK 읽어오기
     def load_and_populate():
-        folder = path_var.get() if path_var and path_var.get() else None
-        entries = manage_load_pcks(folder)
+        entries = manage_load_pcks()
         # clear existing
         try:
             for iid in tree.get_children():
@@ -95,12 +67,6 @@ def build(parent):
     btn1.pack(fill="x", pady=4)
 
     def extract_wav():
-        # determine source folder
-        try:
-            src_folder = Path(path_var.get()) if path_var and path_var.get() else Path.cwd()
-        except Exception:
-            src_folder = Path.cwd()
-
         # gather selection (PCK names)
         items = tree.selection()
         if not items:
@@ -116,19 +82,15 @@ def build(parent):
                 continue
 
         if not names:
-            logger.log("UI", "복사할 PCK 파일이 없습니다")
+            logger.log("UI", "선택된 PCK 파일이 없습니다")
             return
 
-        dest, copied = copy_selected_pcks_to_temp(str(src_folder), names)
-        if not copied:
-            logger.log("UI", "복사된 파일이 없습니다")
-            return
-        logger.log("UI", f"PCK 파일을 복제했습니다: {dest}")
-        for n in copied:
-            logger.log("UI", f"  {n}")
+        # 고정 입력 폴더: 프로젝트의 input_pck
+        workspace_root = Path(__file__).resolve().parents[2]
+        input_dir = workspace_root / 'input_pck'
 
         try:
-            jsons = unpack_copied_pcks_to_data(dest, copied)
+            jsons = unpack_copied_pcks_to_data(str(input_dir), names)
             if not jsons:
                 logger.log("UI", "언팩 또는 JSON 생성된 항목이 없습니다")
                 return
@@ -139,7 +101,7 @@ def build(parent):
             # update tree: attach unpacked children under each PCK item
             workspace_root = Path(__file__).resolve().parents[2]
             data_root = workspace_root / 'data'
-            for name in copied:
+            for name in names:
                 # find tree item whose text matches the pck filename
                 target_iid = None
                 for iid in tree.get_children():

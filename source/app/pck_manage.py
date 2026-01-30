@@ -24,8 +24,14 @@ def load_pcks(folder: str = None) -> list:
     if folder:
         folder_path = Path(folder)
     else:
-        p = config.get_str("ui", "last_path", fallback="")
-        folder_path = Path(p) if p and Path(p).exists() else Path.cwd()
+        # default to project's input_pck (fixed, not under temp)
+        try:
+            workspace_root = Path(__file__).resolve().parents[2]
+            folder_path = workspace_root / 'input_pck'
+            # ensure folder exists
+            folder_path.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            folder_path = Path.cwd()
 
     try:
         pck_files = [x for x in folder_path.iterdir() if x.is_file() and x.suffix.lower() == ".pck"]
@@ -66,8 +72,7 @@ def copy_selected_pcks_to_temp(src_folder: str, filenames: list) -> tuple:
         workspace_root = Path(__file__).resolve().parents[2]
     except Exception:
         workspace_root = Path.cwd()
-    temp_root = workspace_root / 'temp'
-    input_pck_dir = temp_root / 'input_pck'
+    input_pck_dir = workspace_root / 'input_pck'
 
     # 이전 내용 제거
     if input_pck_dir.exists():
