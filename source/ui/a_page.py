@@ -3,7 +3,7 @@ from tkinter import ttk, filedialog
 from pathlib import Path
 from datetime import datetime
 from util import config, logger
-from app.pck_manage import load_pcks as manage_load_pcks, copy_selected_pcks_to_temp
+from app.pck_manage import load_pcks as manage_load_pcks, copy_selected_pcks_to_temp, unpack_copied_pcks_to_data, browse as manage_browse, extract_wav as manage_extract_wav
 
 
 def build(parent):
@@ -24,28 +24,7 @@ def build(parent):
     else:
         path_var.set(str(Path.cwd()))
 
-    def browse():
-        # 저장된 마지막 경로가 유효하면 초기 디렉터리로 사용합니다
-        last = config.get_str("ui", "last_path", fallback="")
-        if last and Path(last).exists():
-            initial = last
-        else:
-            # 마지막 경로가 없거나 유효하지 않으면 프로그램 실행 위치를 기본으로 사용합니다
-            initial = str(Path.cwd())
-        p = filedialog.askdirectory(initialdir=initial)
-        if p:
-            path_var.set(p)
-            config.set_str("ui", "last_path", p)
-            # 경로가 변경되면 이전에 불러온 데이터(트리)를 초기화합니다
-            try:
-                for iid in tree.get_children():
-                    tree.delete(iid)
-            except Exception:
-                # tree가 아직 생성되지 않았거나 접근 불가한 경우 무시
-                pass
-            logger.log("UI", f"경로를 변경하여 로드된 데이터를 초기화했습니다: {p}")
-
-    ttk.Button(top, text="찾아보기", command=browse).pack(side="right")
+    ttk.Button(top, text="찾아보기", command=lambda: manage_browse(tree, path_var)).pack(side="right")
 
     middle = ttk.Frame(parent)
     middle.pack(fill="both", expand=True, padx=6, pady=(0, 6))
@@ -80,20 +59,12 @@ def build(parent):
     btn1 = ttk.Button(left, text="PCK 읽어오기", command=lambda: manage_load_pcks(tree, path_var))
     btn1.pack(fill="x", pady=4)
 
-    def extract_wav():
-        dest, copied = copy_selected_pcks_to_temp(tree, path_var)
-        if not copied:
-            logger.log("UI", "복사할 PCK 파일이 없습니다")
-            return
-        # WAV 추출 동작을 비우고, 선택된 PCK 파일들을 temp/input_pck로 복제만 수행합니다
-        logger.log("UI", f"PCK 파일을 복제했습니다: {dest}")
-        for n in copied:
-            logger.log("UI", f"  {n}")
+    # extract_wav 기능은 앱 계층으로 이동했음; 버튼은 그 함수를 호출합니다
 
     # Button 2: WAV 추출
     for i in range(2, 7):
         if i == 2:
-            btn = ttk.Button(left, text="WAV 추출", command=extract_wav)
+            btn = ttk.Button(left, text="WAV 추출", command=lambda: manage_extract_wav(tree, path_var))
         else:
             btn = ttk.Button(left, text=f"버튼 {i}")
         btn.pack(fill="x", pady=4)

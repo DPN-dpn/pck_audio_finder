@@ -59,13 +59,3 @@ def extract_pck_file(pck_path: str) -> int:
 
 	print('완료')
 	return 0
-
-
-if __name__ == '__main__':
-	if len(sys.argv) > 1:
-		pck_file = sys.argv[1]
-	else:
-		print('사용법: unpack.py <pck파일경로>')
-		sys.exit(1)
-	rc = extract_pck_file(pck_file)
-	sys.exit(rc)
