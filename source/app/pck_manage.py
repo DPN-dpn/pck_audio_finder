@@ -227,18 +227,26 @@ def unpack_copied_pcks_to_data(temp_input_dir: str, filenames: list, progress_cb
             except Exception:
                 pass
 
+            # Collect BNK folders and their files, storing empty metadata for
+            # `category` and `subtitle` so the JSON schema already contains
+            # those fields for future enrichment.
             bnk_infos = []
             if target.exists():
                 for child in target.iterdir():
                     if child.is_dir() and child.name.lower().endswith('_bnk'):
-                        files = [str(p.relative_to(child)) for p in child.rglob('*') if p.is_file()]
+                        files = []
+                        for p in child.rglob('*'):
+                            if p.is_file():
+                                rel = str(p.relative_to(child))
+                                files.append({'name': rel, 'category': '', 'subtitle': ''})
                         bnk_infos.append({'bnk_folder': child.name, 'files': files})
 
+            # Collect root WEM files with empty metadata fields
             wem_files = []
             if target.exists():
                 for p in target.iterdir():
                     if p.is_file():
-                        wem_files.append(p.name)
+                        wem_files.append({'name': p.name, 'category': '', 'subtitle': ''})
 
             try:
                 # report mid-structure progress

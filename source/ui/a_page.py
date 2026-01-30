@@ -3,6 +3,7 @@ from tkinter import ttk, filedialog
 from pathlib import Path
 from datetime import datetime
 from util import logger
+from util import config as _config
 from app.pck_manage import load_pcks as manage_load_pcks, unpack_copied_pcks_to_data
 from .progress_overlay import ProgressOverlay
 import threading
@@ -33,15 +34,83 @@ def build(parent):
     tree_frame = ttk.Frame(right)
     tree_frame.pack(fill="both", expand=True)
 
-    cols = ("size", "modified")
+    cols = ("category", "subtitle")
     # show tree column (#0) so expand/collapse icons appear, and keep headings for other cols
     tree = ttk.Treeview(tree_frame, columns=cols, show="tree headings")
     tree.heading("#0", text="이름")
-    tree.heading("size", text="크기")
-    tree.heading("modified", text="수정일")
-    tree.column("#0", anchor="w", width=240)
-    tree.column("size", width=100, anchor="e")
-    tree.column("modified", width=160, anchor="center")
+    tree.heading("category", text="분류")
+    tree.heading("subtitle", text="자막")
+    # restore column widths from config if available
+    try:
+        name_w = _config.get_int("ui", "col_name_width", fallback=184)
+        cat_w = _config.get_int("ui", "col_category_width", fallback=70)
+        sub_w = _config.get_int("ui", "col_subtitle_width", fallback=0)
+    except Exception:
+        name_w, cat_w, sub_w = 184, 70, 0
+
+    tree.column("#0", anchor="w", width=name_w)
+    tree.column("category", width=cat_w, anchor="center")
+    # subtitle width: if config has stored value (>0) use it; otherwise compute from frame width
+    if sub_w and int(sub_w) > 0:
+        tree.column("subtitle", width=int(sub_w), anchor="w")
+    else:
+        # temporary width until we compute remaining space
+        tree.column("subtitle", width=120, anchor="w")
+
+    # Compute subtitle (3rd column) width as remaining space and persist
+    try:
+        def _compute_sub_w(retries=6):
+            try:
+                frame_w = tree_frame.winfo_width()
+                if frame_w <= 1 and retries > 0:
+                    parent.after(80, lambda: _compute_sub_w(retries - 1))
+                    return
+                # reserve small padding for scrollbar / borders
+                avail = max(60, int(frame_w) - int(name_w) - int(cat_w) - 8)
+                tree.column("subtitle", width=avail)
+                try:
+                    _config.set_int('ui', 'col_subtitle_width', int(avail))
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+        parent.after(120, _compute_sub_w)
+    except Exception:
+        pass
+
+    # Poll column widths and persist changes to config (save if user resizes)
+    try:
+        last_col_widths = {
+            '#0': tree.column('#0', option='width'),
+            'category': tree.column('category', option='width'),
+            'subtitle': tree.column('subtitle', option='width')
+        }
+
+        def _poll_col_widths():
+            try:
+                cur_name = tree.column('#0', option='width')
+                cur_cat = tree.column('category', option='width')
+                cur_sub = tree.column('subtitle', option='width')
+                if cur_name != last_col_widths['#0']:
+                    _config.set_int('ui', 'col_name_width', int(cur_name))
+                    last_col_widths['#0'] = cur_name
+                if cur_cat != last_col_widths['category']:
+                    _config.set_int('ui', 'col_category_width', int(cur_cat))
+                    last_col_widths['category'] = cur_cat
+                if cur_sub != last_col_widths['subtitle']:
+                    _config.set_int('ui', 'col_subtitle_width', int(cur_sub))
+                    last_col_widths['subtitle'] = cur_sub
+            except Exception:
+                pass
+            try:
+                parent.after(1000, _poll_col_widths)
+            except Exception:
+                pass
+
+        parent.after(1000, _poll_col_widths)
+    except Exception:
+        pass
 
     vscroll = ttk.Scrollbar(tree_frame, orient="vertical", command=tree.yview)
     tree.configure(yscrollcommand=vscroll.set)
@@ -103,7 +172,8 @@ def build(parent):
                     pass
                 for e in entries:
                     try:
-                        tree.insert("", "end", text=e['name'], values=(str(e['size']), e['modified']))
+                        # 초기 로드 시에는 이름만 채우고 나머지 컬럼은 공백으로 둡니다
+                        tree.insert("", "end", text=e['name'], values=("", ""))
                     except Exception:
                         pass
                 overlay.hide()
@@ -168,11 +238,11 @@ def build(parent):
                 if not unpack_dir.exists():
                     return
 
-                # add root files
+                # add root files (classification is unknown at extract step)
                 for p in sorted(unpack_dir.iterdir()):
                     if p.is_file():
                         try:
-                            tree.insert(target_iid, 'end', text=p.name, values=(str(p.stat().st_size), datetime.fromtimestamp(p.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S')))
+                            tree.insert(target_iid, 'end', text=p.name, values=("", ""))
                         except Exception:
                             pass
 
@@ -180,12 +250,13 @@ def build(parent):
                 for child in sorted(unpack_dir.iterdir()):
                     if child.is_dir() and child.name.lower().endswith('_bnk'):
                         try:
-                            folder_iid = tree.insert(target_iid, 'end', text=child.name + '/', values=('', ''))
+                            # folder row: leave classification empty at extract step
+                            folder_iid = tree.insert(target_iid, 'end', text=child.name + '/', values=("", ""))
                             for file in sorted(child.rglob('*')):
                                 if file.is_file():
                                     try:
                                         rel = file.relative_to(child)
-                                        tree.insert(folder_iid, 'end', text=str(rel), values=(str(file.stat().st_size), datetime.fromtimestamp(file.stat().st_mtime).strftime('%Y-%m-%d %H:%M:%S')))
+                                        tree.insert(folder_iid, 'end', text=str(rel), values=("", ""))
                                     except Exception:
                                         pass
                         except Exception:

@@ -96,4 +96,6 @@ def build_layout(root):
 
     paned.bind("<ButtonRelease-1>", _on_release)
 
+    # layout.py does not create the main treeview; column width persistence
+    # is handled in the UI module where the `tree` widget exists.
     return tab_a, tab_b, log
