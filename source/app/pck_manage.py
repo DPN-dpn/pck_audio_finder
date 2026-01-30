@@ -4,6 +4,7 @@ from util import logger, config
 import shutil
 import json
 import os
+import subprocess
 
 
 """앱 레벨의 PCK 관리기능 — UI와 분리된 순수 로직 모듈.
@@ -18,7 +19,7 @@ import os
 def load_pcks(folder: str = None, progress_cb=None) -> list:
     """폴더에서 .pck 파일 목록을 수집하여 메타정보 리스트로 반환합니다.
 
-    각 항목은 {'name', 'size', 'modified'} 형태입니다.
+    각 항목은 {'name'} 형태입니다.
     """
     # 경로 결정
     if folder:
@@ -47,14 +48,14 @@ def load_pcks(folder: str = None, progress_cb=None) -> list:
     total = len(pck_files)
     for idx, f in enumerate(pck_files):
         try:
-            st = f.stat()
-            size = st.st_size
-            modified = datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+            results.append({"name": f.name})
+            logger.log("PCK", f"  {f.name}")
         except Exception:
-            size = 0
-            modified = ""
-        results.append({"name": f.name, "size": size, "modified": modified})
-        logger.log("PCK", f"  {f.name}")
+            # if logging or name access fails, skip but keep progress moving
+            try:
+                results.append({"name": str(f)})
+            except Exception:
+                pass
         # progress callback: fraction 0..1 and optional message
         try:
             if progress_cb and total:
@@ -211,6 +212,35 @@ def unpack_copied_pcks_to_data(temp_input_dir: str, filenames: list, progress_cb
                     shutil.move(str(unpacked), str(target))
                 except Exception as e:
                     logger.log('PCK', f'언팩 결과 이동 실패: {e}')
+
+                # After moving unpacked files to data, convert any .wem files to .wav
+                try:
+                    vgm_cli = workspace_root / 'lib' / 'vgmstream' / 'vgmstream-cli.exe'
+                    if vgm_cli.exists():
+                        # walk target and convert .wem files
+                        for root_dir, dirs, files in os.walk(str(target)):
+                            for fn in files:
+                                if fn.lower().endswith('.wem'):
+                                    wem_path = Path(root_dir) / fn
+                                    wav_path = wem_path.with_suffix('.wav')
+                                    try:
+                                        if progress_cb:
+                                            progress_cb(min(1.0, step / total_steps), f"파일 작성: {wem_path}")
+                                        # call vgmstream-cli: -o output input
+                                        rc = subprocess.run([str(vgm_cli), '-o', str(wav_path), str(wem_path)], cwd=str(vgm_cli.parent))
+                                        if rc.returncode == 0:
+                                            try:
+                                                wem_path.unlink()
+                                            except Exception:
+                                                pass
+                                        else:
+                                            logger.log('PCK', f'WEM->WAV 변환 실패({rc.returncode}): {wem_path}')
+                                    except Exception as e:
+                                        logger.log('PCK', f'WEM 변환 중 예외: {e}')
+                    else:
+                        logger.log('PCK', f'vgmstream-cli 실행 파일을 찾을 수 없습니다: {vgm_cli}')
+                except Exception:
+                    pass
 
                 # after move: move step to end of unpack span
                 step = step_at_unpack + unpack_span
