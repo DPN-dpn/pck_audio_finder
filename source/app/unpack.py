@@ -9,7 +9,7 @@ from BNKcompiler import BNK
 from HoyoPckExtractor import PCKextract
 
 
-def extract_pck_file(pck_path: str) -> int:
+def extract_pck_file(pck_path: str, progress_cb=None) -> int:
 	"""Extract a single .pck file into <pckname>_unpacked next to the PCK.
 
 	- BNK files are extracted into a dedicated BNK folder under the output dir.
@@ -33,6 +33,9 @@ def extract_pck_file(pck_path: str) -> int:
 		print(f'PCK 추출 실패: {e}')
 		return 4
 
+	# report total count if possible
+	total = len(allFiles) if isinstance(allFiles, dict) else 0
+	processed = 0
 	for filename, data in allFiles.items():
 		try:
 			lower = filename.lower()
@@ -45,17 +48,43 @@ def extract_pck_file(pck_path: str) -> int:
 					os.makedirs(bnk_folder, exist_ok=True)
 					bnkObj.extract('all', bnk_folder)
 					print(f'BNK 처리: {filename} -> {bnk_folder}')
+					# progress callback per-file
+					processed += 1
+					if progress_cb:
+						try:
+							progress_cb(processed / max(1, total), f'BNK 처리: {filename}')
+						except Exception:
+							pass
 				else:
 					print(f'BNK에 데이터 없음: {filename}')
+					processed += 1
+					if progress_cb:
+						try:
+							progress_cb(processed / max(1, total), f'BNK에 데이터 없음: {filename}')
+						except Exception:
+							pass
 			else:
 				# WEM 등은 출력 폴더의 루트에 평탄화하여 저장 (하위 폴더 생성하지 않음)
 				base_name = os.path.basename(filename)
 				target = os.path.join(output_path, base_name)
 				with open(target, 'wb') as o:
 					o.write(data)
-				print(f'파일 작성: {target}')
+					print(f'파일 작성: {target}')
+					processed += 1
+					if progress_cb:
+						try:
+							progress_cb(processed / max(1, total), f'파일 작성: {target}')
+						except Exception:
+							pass
 		except Exception as e:
 			print(f'처리 실패 {filename}: {e}')
+
+	# final callback
+	if progress_cb:
+		try:
+			progress_cb(1.0, '언팩 내부 완료')
+		except Exception:
+			pass
 
 	print('완료')
 	return 0

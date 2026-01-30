@@ -45,8 +45,8 @@ def build_layout(root):
             btn_b.config(relief="sunken")
             btn_a.config(relief="raised")
 
-    btn_a = _tk.Button(switch_frame, text="A", command=lambda: show("A"))
-    btn_b = _tk.Button(switch_frame, text="B", command=lambda: show("B"))
+    btn_a = _tk.Button(switch_frame, text="pck 맵핑", command=lambda: show("A"))
+    btn_b = _tk.Button(switch_frame, text="wav 검색", command=lambda: show("B"))
 
     btn_a.pack(side="left", fill="x", expand=True)
     btn_b.pack(side="left", fill="x", expand=True)
