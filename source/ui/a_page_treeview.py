@@ -95,25 +95,25 @@ class APageTree:
         # 사용자가 컬럼을 드래그하여 크기를 바꿀 수 있으므로 주기적으로 검사하여
         # 변경이 있으면 설정에 저장합니다.
         last_widths = {
-            '#0': self.tree.column('#0', option='width'),
-            'category': self.tree.column('category', option='width'),
-            'subtitle': self.tree.column('subtitle', option='width')
+            "#0": self.tree.column("#0", option="width"),
+            "category": self.tree.column("category", option="width"),
+            "subtitle": self.tree.column("subtitle", option="width"),
         }
 
         def _poll_widths():
             try:
-                cur_name = self.tree.column('#0', option='width')
-                cur_cat = self.tree.column('category', option='width')
-                cur_sub = self.tree.column('subtitle', option='width')
-                if cur_name != last_widths['#0']:
-                    _config.set_int('ui', 'col_name_width', int(cur_name))
-                    last_widths['#0'] = cur_name
-                if cur_cat != last_widths['category']:
-                    _config.set_int('ui', 'col_category_width', int(cur_cat))
-                    last_widths['category'] = cur_cat
-                if cur_sub != last_widths['subtitle']:
-                    _config.set_int('ui', 'col_subtitle_width', int(cur_sub))
-                    last_widths['subtitle'] = cur_sub
+                cur_name = self.tree.column("#0", option="width")
+                cur_cat = self.tree.column("category", option="width")
+                cur_sub = self.tree.column("subtitle", option="width")
+                if cur_name != last_widths["#0"]:
+                    _config.set_int("ui", "col_name_width", int(cur_name))
+                    last_widths["#0"] = cur_name
+                if cur_cat != last_widths["category"]:
+                    _config.set_int("ui", "col_category_width", int(cur_cat))
+                    last_widths["category"] = cur_cat
+                if cur_sub != last_widths["subtitle"]:
+                    _config.set_int("ui", "col_subtitle_width", int(cur_sub))
+                    last_widths["subtitle"] = cur_sub
             except Exception as e:
                 # 폴링 중에 발생한 예외는 로그로 남기고 다시 예약
                 logger.log("UI", f"컬럼 너비 폴링 오류: {e}")
@@ -126,20 +126,97 @@ class APageTree:
         # 저장소에서 PCK 목록이 변경되면 이 리스너를 통해 UI 트리를 갱신합니다.
         if self.model is not None and hasattr(self.model, "register_pck_list_listener"):
 
+            def _sync_and_apply(items: List[Dict[str, Any]]):
+                # 우선순위: storage.unpack_results가 있으면 그 키들만 트리에 적용
+                # (pck_list는 무시). unpack_results가 비어있으면 pck_list를 적용.
+                try:
+                    ur = getattr(self.model, "unpack_results", None)
+                except Exception:
+                    ur = None
+
+                if isinstance(ur, dict) and ur:
+                    # unpack_results에 있는 항목들로 트리 초기화
+                    entries = [{"name": k} for k in ur.keys()]
+                    self.insert_pcks(entries)
+                    for name, res in ur.items():
+                        try:
+                            if res:
+                                self.apply_listing(name, res)
+                        except Exception:
+                            logger.log("UI", f"apply_listing 실패: {name}")
+                    return
+
+                # unpack_results가 없으면 pck_list를 사용
+                if not isinstance(items, list):
+                    return
+                self.insert_pcks(items)
+                # pck_list 항목 중 unpack_results가 별도 존재하는 경우만 상세 적용
+                for e in items:
+                    if not isinstance(e, dict):
+                        continue
+                    name = e.get("name")
+                    if not name:
+                        continue
+                    try:
+                        if hasattr(self.model, "get_unpack_result"):
+                            res = self.model.get_unpack_result(name)
+                            if res:
+                                try:
+                                    self.apply_listing(name, res)
+                                except Exception:
+                                    logger.log("UI", f"apply_listing 실패: {name}")
+                    except Exception:
+                        logger.log("UI", f"get_unpack_result 실패: {name}")
+
             def _on_pck_list(items: List[Dict[str, Any]]):
                 # storage는 별도 스레드에서 변경 알림을 줄 수 있으므로
                 # UI 갱신은 항상 메인 스레드에서 수행되도록 `after`로 예약합니다.
-                self.parent.after(1, lambda: self.insert_pcks(items))
+                self.parent.after(1, lambda it=items: _sync_and_apply(it))
 
             try:
                 self.model.register_pck_list_listener(_on_pck_list)
-                # 이미 로드된 목록이 있으면 즉시 동기화
+            except Exception as e:
+                logger.log("UI", f"storage 리스너 등록 실패: {e}")
+
+            # 이미 로드된 목록이 있으면 즉시 동기화 및 unpack_results 적용
+            try:
                 current = self.model.get_pck_list()
                 if current:
-                    self.parent.after(1, lambda: self.insert_pcks(current))
+                    self.parent.after(1, lambda: _sync_and_apply(current))
             except Exception as e:
-                # 리스너 등록 실패는 치명적이지 않으므로 로그만 남깁니다.
-                logger.log("UI", f"storage 리스너 등록/초기화 실패: {e}")
+                logger.log("UI", f"storage 초기 목록 조회 실패: {e}")
+
+            # 또한 storage에 이미 저장된 unpack_results가 있으면 초기화 시점에
+            # 트리에 반영합니다. pck_list에 없는 항목이라도 루트로 추가합니다.
+            try:
+                ur = getattr(self.model, "unpack_results", None)
+                if isinstance(ur, dict) and ur:
+
+                    def _apply_all_unpack_results():
+                        try:
+                            # 현재 트리 루트 이름 목록
+                            existing = [
+                                self.tree.item(i)["text"]
+                                for i in self.tree.get_children()
+                            ]
+                        except Exception:
+                            existing = []
+                        for k, v in ur.items():
+                            name = k
+                            try:
+                                if name not in existing:
+                                    self.tree.insert(
+                                        "", "end", text=name, values=("", "")
+                                    )
+                                self.apply_listing(name, v)
+                            except Exception as e:
+                                logger.log(
+                                    "UI", f"unpack_results 초기 적용 실패: {name} {e}"
+                                )
+
+                    self.parent.after(2, _apply_all_unpack_results)
+            except Exception as e:
+                logger.log("UI", f"unpack_results 조회 실패: {e}")
 
     # ---------------------------------------------------------------------
     def insert_pcks(self, entries: List[Dict[str, Any]]) -> None:
@@ -159,7 +236,7 @@ class APageTree:
         for e in entries:
             if not isinstance(e, dict):
                 continue
-            name = e.get('name')
+            name = e.get("name")
             if not name:
                 continue
             # 루트 항목으로 삽입. 추가 메타가 필요하면 values에 넣어 확장 가능
@@ -177,7 +254,7 @@ class APageTree:
         names: List[str] = []
         for iid in items:
             it = self.tree.item(iid)
-            name = it.get('text')
+            name = it.get("text")
             if name:
                 names.append(name)
         return names
@@ -203,7 +280,7 @@ class APageTree:
         # 대상 루트 노드를 탐색
         target = None
         for iid in self.tree.get_children():
-            if self.tree.item(iid).get('text') == pck_name:
+            if self.tree.item(iid).get("text") == pck_name:
                 target = iid
                 break
         if target is None:
@@ -215,16 +292,18 @@ class APageTree:
             self.tree.delete(c)
 
         # WEM 파일 목록 추가
-        for w in listing.get('wem', []):
-            if isinstance(w, dict) and w.get('name'):
-                self.tree.insert(target, 'end', text=w.get('name'), values=("", ""))
+        for w in listing.get("wem", []):
+            if isinstance(w, dict) and w.get("name"):
+                self.tree.insert(target, "end", text=w.get("name"), values=("", ""))
 
         # BNK 폴더 및 내부 파일 추가
-        for b in listing.get('bnk', []):
+        for b in listing.get("bnk", []):
             if not isinstance(b, dict):
                 continue
-            folder = b.get('bnk_folder', '') + '/'
-            folder_iid = self.tree.insert(target, 'end', text=folder, values=("", ""))
-            for f in b.get('files', []):
-                if isinstance(f, dict) and f.get('name'):
-                    self.tree.insert(folder_iid, 'end', text=f.get('name'), values=("", ""))
+            folder = b.get("bnk_folder", "") + "/"
+            folder_iid = self.tree.insert(target, "end", text=folder, values=("", ""))
+            for f in b.get("files", []):
+                if isinstance(f, dict) and f.get("name"):
+                    self.tree.insert(
+                        folder_iid, "end", text=f.get("name"), values=("", "")
+                    )
