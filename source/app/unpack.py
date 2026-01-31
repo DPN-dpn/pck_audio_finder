@@ -1,90 +1,256 @@
-import os
-import sys
+import threading
+from pathlib import Path
+from typing import List, Dict, Any
+from util import logger
+from model.storage import storage
 
-# Determine the script directory
-script_dir = os.path.dirname(__file__)
-
-sys.path.append(os.path.join(script_dir,'..','..','lib','HoyoAudioTools','lib'))  # Add the lib directory to the sys.path
-from BNKcompiler import BNK
-from HoyoPckExtractor import PCKextract
+# 기본 청크 크기: 100 MiB
+DEFAULT_CHUNK_BYTES = 100 * 1024 * 1024
 
 
-def extract_pck_file(pck_path: str, progress_cb=None) -> int:
-	"""Extract a single .pck file into <pckname>_unpacked next to the PCK.
+def _show_initial_overlay(overlay, parent) -> None:
+    """오버레이를 indeterminate 상태로 표시합니다 (UI 스레드에서 호출되어야 함)."""
+    if overlay is None:
+        return
+    overlay.show("PCK 청크 구분 중...", maximum=1.0, indeterminate=True)
 
-	- BNK files are extracted into a dedicated BNK folder under the output dir.
-	- WEM files are written into the output dir preserving any contained paths.
 
-	Returns exit code (0 success, non-zero failure).
-	"""
-	if not os.path.isfile(pck_path):
-		print(f'파일이 존재하지 않습니다: {pck_path}')
-		return 2
-	if not pck_path.lower().endswith('.pck'):
-		print(f'PCK 파일이 아닙니다: {pck_path}')
-		return 3
+def _hide_overlay(overlay, parent) -> None:
+    """오버레이를 숨깁니다. 항상 메인 스레드에서 숨기도록 `parent.after`로 예약합니다."""
+    if overlay is None:
+        return
 
-	output_path = os.path.join(os.path.dirname(pck_path), os.path.splitext(os.path.basename(pck_path))[0] + '_unpacked')
-	os.makedirs(output_path, exist_ok=True)
+    def _do_hide():
+        try:
+            overlay.hide()
+        except Exception as e:
+            logger.log("UNPACK", f"overlay.hide 실패: {e}")
 
-	try:
-		allFiles = PCKextract(pck_path, output_path).extract()
-	except Exception as e:
-		print(f'PCK 추출 실패: {e}')
-		return 4
+    try:
+        parent.after(1, _do_hide)
+    except Exception:
+        # parent.after 호출 불가 시 즉시 호출
+        _do_hide()
 
-	# report total count if possible
-	total = len(allFiles) if isinstance(allFiles, dict) else 0
-	processed = 0
-	for filename, data in allFiles.items():
-		try:
-			lower = filename.lower()
-			if lower.endswith('.bnk'):
-				# BNK는 별도 폴더로 분리하되, 실제 DATA가 있을 때만 폴더를 만듭니다
-				bnkObj = BNK(bytes=data)
-				if bnkObj.data.get('DATA') is not None:
-					bnk_folder_name = os.path.splitext(os.path.basename(filename))[0] + '_bnk'
-					bnk_folder = os.path.join(output_path, bnk_folder_name)
-					os.makedirs(bnk_folder, exist_ok=True)
-					bnkObj.extract('all', bnk_folder)
-					print(f'BNK 처리: {filename} -> {bnk_folder}')
-					# progress callback per-file
-					processed += 1
-					if progress_cb:
-						try:
-							progress_cb(processed / max(1, total), f'BNK 처리: {filename}')
-						except Exception:
-							pass
-				else:
-					print(f'BNK에 데이터 없음: {filename}')
-					processed += 1
-					if progress_cb:
-						try:
-							progress_cb(processed / max(1, total), f'BNK에 데이터 없음: {filename}')
-						except Exception:
-							pass
-			else:
-				# WEM 등은 출력 폴더의 루트에 평탄화하여 저장 (하위 폴더 생성하지 않음)
-				base_name = os.path.basename(filename)
-				target = os.path.join(output_path, base_name)
-				with open(target, 'wb') as o:
-					o.write(data)
-					print(f'파일 작성: {target}')
-					processed += 1
-					if progress_cb:
-						try:
-							progress_cb(processed / max(1, total), f'파일 작성: {target}')
-						except Exception:
-							pass
-		except Exception as e:
-			print(f'처리 실패 {filename}: {e}')
 
-	# final callback
-	if progress_cb:
-		try:
-			progress_cb(1.0, '언팩 내부 완료')
-		except Exception:
-			pass
+def _prepare_output_dir(root: Path) -> Path:
+    """출력용 data 디렉터리를 준비하여 반환합니다."""
+    out_dir = root / "data"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    return out_dir
 
-	print('완료')
-	return 0
+
+def _get_pck_items() -> List[Dict[str, Any]]:
+    """저장소에서 PCK 항목 목록을 읽어 반환합니다. 실패 시 빈 리스트 반환."""
+    try:
+        return storage.get_pck_list() or []
+    except Exception as e:
+        logger.log("UNPACK", f"storage.get_pck_list 실패: {e}")
+        return []
+
+
+def _get_item_size(item: Dict[str, Any], root: Path) -> int:
+    """항목의 파일 크기를 결정합니다.
+
+    우선 item['size'] 필드를 사용하고 없으면 item['path']로 파일을 찾아 크기 조회.
+    실패하면 0을 반환합니다.
+    """
+    if not isinstance(item, dict):
+        return 0
+
+    s = item.get("size")
+    if s is not None:
+        try:
+            return int(s)
+        except Exception:
+            pass
+
+    p = item.get("path")
+    if not p:
+        return 0
+    pth = Path(p)
+    if not pth.is_absolute():
+        pth = root / pth
+    if pth.exists():
+        return int(pth.stat().st_size)
+    return 0
+
+
+def _chunk_pck_by_size(items: List[Dict[str, Any]], root: Path, max_chunk_bytes: int = DEFAULT_CHUNK_BYTES) -> List[List[Dict[str, Any]]]:
+    """크기 기준으로 PCK 항목들을 청크로 나눕니다.
+
+    - 가능한 한 각 청크의 총합이 `max_chunk_bytes`를 넘지 않도록 그룹화합니다.
+    - 단일 파일이 `max_chunk_bytes`보다 크면 그 파일은 단독 청크가 됩니다.
+    """
+    chunks: List[List[Dict[str, Any]]] = []
+    cur: List[Dict[str, Any]] = []
+    cur_sum = 0
+
+    for it in items:
+        sz = _get_item_size(it, root)
+        # 큰 단일 항목은 별도 청크로 처리
+        if sz >= max_chunk_bytes:
+            if cur:
+                chunks.append(cur)
+                cur = []
+                cur_sum = 0
+            chunks.append([it])
+            continue
+
+        if cur_sum + sz > max_chunk_bytes and cur:
+            chunks.append(cur)
+            cur = [it]
+            cur_sum = sz
+        else:
+            cur.append(it)
+            cur_sum += sz
+
+    if cur:
+        chunks.append(cur)
+    return chunks
+
+
+def _update_progress(overlay_obj, current: int, total_count: int) -> None:
+    """오버레이에 진행도를 안전하게 갱신합니다 (디버깅을 위해 실패는 로깅)."""
+    if overlay_obj is None:
+        return
+    sub = f"[{current}/{total_count}]"
+    try:
+        frac = float(current) / float(total_count) if total_count and total_count > 0 else 1.0
+    except Exception:
+        frac = 1.0
+    try:
+        overlay_obj.schedule(frac, "PCK 언팩 중...", sub)
+    except Exception as e:
+        logger.log("UNPACK", f"오버레이 업데이트 실패: {e}")
+
+
+def unpack_pck(tree_manager, parent, overlay: object = None) -> None:
+    """PCK 목록을 가져와 용량 기준으로 청크를 나눈 뒤(로그만 남김) 오버레이를 닫습니다.
+
+    현재 함수는 청크 분할과 로그 기록까지만 수행하며, 실제 언팩 로직은
+    `_process_pck_item` 등으로 분리하여 나중에 추가할 수 있도록 설계되어 있습니다.
+    """
+    # UI 표시
+    try:
+        _show_initial_overlay(overlay, parent)
+    except Exception as e:
+        logger.log("UNPACK", f"오버레이 표시 실패: {e}")
+
+    def _unpack_chunk(chunk_items: List[Dict[str, Any]], root: Path, out_dir: Path, overlay_obj, parent_obj, processed_counter: Dict[str, int], total_count: int) -> None:
+        """주어진 청크의 PCK 항목들을 언팩해서 `out_dir`에 저장.
+
+        - `processed_counter`는 {'n': int} 형태의 가변 카운터로, 처리된 파일 수를
+          증가시키며 메인 오버레이에 진행을 보고합니다.
+        - overlay_obj는 ProgressOverlay 인스턴스(또는 유사 API)를 가정합니다.
+        """
+        # 런타임으로 HoyoAudioTools 라이브러리 경로를 추가하고 필요한 클래스 임포트
+        try:
+            import sys
+            lib_path = root / "lib" / "HoyoAudioTools" / "lib"
+            if str(lib_path) not in sys.path:
+                sys.path.insert(0, str(lib_path))
+            from HoyoPckExtractor import PCKextract
+            from BNKcompiler import BNK
+        except Exception as e:
+            logger.log("UNPACK", f"HoyoAudioTools 임포트 실패: {e}")
+            return
+
+        for item in chunk_items:
+            # pck 파일 경로 결정
+            path_str = item.get("path") or item.get("name")
+            if not path_str:
+                logger.log("UNPACK", f"항목에 경로 없음: {item}")
+                continue
+            pth = Path(path_str)
+            if not pth.is_absolute():
+                pth = root / pth
+            if not pth.exists():
+                logger.log("UNPACK", f"PCK 파일 존재하지 않음: {pth}")
+                processed_counter['n'] += 1
+                _update_progress(overlay_obj, processed_counter['n'], total_count)
+                continue
+
+            # 출력 서브디렉터리: data/<pck_name_without_ext>/
+            name = item.get("name") or pth.name
+            base_name = Path(name).stem
+            target_dir = out_dir / base_name
+            # 이미 결과 폴더가 존재하고 비어있지 않으면 언팩이 완료된 것으로 간주하고 건너뜁니다.
+            # 이미 결과물이 있으면 건너뜀
+            try:
+                if target_dir.exists() and any(target_dir.iterdir()):
+                    logger.log("UNPACK", f"이미 언팩된 것으로 건너뜀: {target_dir.name}")
+                    processed_counter['n'] += 1
+                    _update_progress(overlay_obj, processed_counter['n'], total_count)
+                    continue
+            except Exception as e:
+                logger.log("UNPACK", f"결과 폴더 검사 실패: {e}")
+
+            target_dir.mkdir(parents=True, exist_ok=True)
+
+            try:
+                extractor = PCKextract(str(pth), str(target_dir))
+                allfiles = extractor.extract()
+            except Exception as e:
+                logger.log("UNPACK", f"PCK 언팩 실패 {pth}: {e}")
+                processed_counter['n'] += 1
+                _update_progress(overlay_obj, processed_counter['n'], total_count)
+                continue
+
+            # allfiles: dict of relative path -> bytes
+            for rel, data in allfiles.items():
+                outpath = target_dir / rel
+                try:
+                    if rel.lower().endswith('.bnk'):
+                        bnk_obj = BNK(bytes=data)
+                        if bnk_obj.data.get('DATA') is not None:
+                            bnk_folder = target_dir / (Path(rel).stem + '_bnk')
+                            bnk_folder.mkdir(parents=True, exist_ok=True)
+                            bnk_obj.extract('all', str(bnk_folder))
+                    else:
+                        outpath.parent.mkdir(parents=True, exist_ok=True)
+                        with open(outpath, 'wb') as f:
+                            f.write(data)
+                except Exception as e:
+                    logger.log("UNPACK", f"파일 기록 실패 {rel}: {e}")
+
+            # 처리 카운터 증가 및 진행 갱신
+            processed_counter['n'] += 1
+            _update_progress(overlay_obj, processed_counter['n'], total_count)
+
+    def worker():
+        root = Path(__file__).resolve().parents[2]
+        out_dir = _prepare_output_dir(root)
+
+        pck_items = _get_pck_items()
+        logger.log("UNPACK", f"발견된 PCK 파일: {len(pck_items)}개")
+
+        # 전체 항목 수 (진행도 기준)
+        total_files = len(pck_items) if pck_items else 0
+
+        # 오버레이 전환은 UI 스레드에서 수행해야 안전합니다. 가능한 경우
+        # `parent.after`로 예약해 메인 스레드에서 실행하도록 합니다.
+        try:
+            if overlay is not None:
+                try:
+                    # ProgressOverlay는 fraction(0..1) 방식으로 사용되도록 설계되어
+                    # 있으므로 determinate 모드의 maximum을 1.0으로 설정합니다.
+                    parent.after(0, lambda: overlay.show("PCK 언팩 중...", maximum=1.0, indeterminate=False))
+                except Exception:
+                    # `after`가 사용 불가하면 직접 호출 시도
+                    overlay.show("PCK 언팩 중...", maximum=1.0, indeterminate=False)
+        except Exception as e:
+            logger.log("UNPACK", f"오버레이 전환 실패: {e}")
+
+        # 청크 단위로 처리
+        chunks = _chunk_pck_by_size(pck_items, root)
+        logger.log("UNPACK", f"청크로 분할된 그룹 수: {len(chunks)}")
+        processed = {'n': 0}
+        for ch in chunks:
+            _unpack_chunk(ch, root, out_dir, overlay, parent, processed, total_files)
+        logger.log("UNPACK", f"PCK 언팩 완료됨")
+
+        # 완료 후 오버레이 숨기기(메인 스레드에서)
+        _hide_overlay(overlay, parent)
+
+    threading.Thread(target=worker, daemon=True).start()

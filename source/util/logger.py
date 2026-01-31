@@ -11,7 +11,6 @@ via widget.after(...) so it is safe to call from worker threads.
 """
 
 import threading
-from typing import Optional
 
 _widget = None
 _buffer = []
