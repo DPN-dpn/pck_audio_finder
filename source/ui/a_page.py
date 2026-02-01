@@ -4,6 +4,7 @@ from .progress_overlay import ProgressOverlay
 from .a_page_treeview import APageTree
 from app.load_pck import load_pck as app_load_pck
 from app.unpack import unpack_pck as app_unpack_pck
+from app.convert_wav import convert_wav as app_convert_wav
 
 
 def build(parent):
@@ -42,5 +43,13 @@ def build(parent):
         left,
         text="PCK 언팩",
         command=lambda: app_unpack_pck(tree_manager, parent, overlay),
+    )
+    btn.pack(fill="x", pady=4)
+
+    # 버튼3 WAV 변환
+    btn = ttk.Button(
+        left,
+        text="WAV 변환",
+        command=lambda: app_convert_wav(tree_manager, parent, overlay),
     )
     btn.pack(fill="x", pady=4)
