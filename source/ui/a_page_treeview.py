@@ -265,7 +265,7 @@ class APageTree:
 
         예상되는 listing 구조 예시:
         {
-            'wem': [ {'name': 'sound1.wem'}, ... ],
+            'files': [ {'name': 'sound1.wem' or 'sound1.wav', ...}, ... ],
             'bnk': [ {'bnk_folder': 'folder', 'files':[{'name':'file1'},{...}]}, ... ]
         }
 
@@ -291,8 +291,8 @@ class APageTree:
         for c in list(self.tree.get_children(target)):
             self.tree.delete(c)
 
-        # WEM 파일 목록 추가
-        for w in listing.get("wem", []):
+        # 파일 목록 추가 (WEM 또는 WAV 모두 가능)
+        for w in listing.get("files", []):
             if isinstance(w, dict) and w.get("name"):
                 self.tree.insert(target, "end", text=w.get("name"), values=("", ""))
 

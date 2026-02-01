@@ -161,10 +161,28 @@ def unpack_pck(tree_manager, parent, overlay: object = None) -> None:
         # 런타임으로 HoyoAudioTools 라이브러리 경로를 추가하고 필요한 클래스 임포트
         try:
             import sys
+            import types
 
             lib_path = root / "lib" / "HoyoAudioTools" / "lib"
+            # prefer to load modules from the bundled lib path
             if str(lib_path) not in sys.path:
                 sys.path.insert(0, str(lib_path))
+
+            # Try to load HoyoPckExtractor safely: read source and patch the
+            # problematic f-string at runtime into a safe expression. This
+            # avoids modifying the vendored file on disk.
+            extractor_path = lib_path / "HoyoPckExtractor.py"
+            if extractor_path.exists():
+                src = extractor_path.read_text(encoding="utf-8")
+                src_fixed = src.replace(
+                    "f'{int.from_bytes(id[::-1], 'big')}.{extension}'",
+                    "str(int.from_bytes(id[::-1], 'big')) + '.' + extension",
+                )
+                modname = "HoyoPckExtractor"
+                module = types.ModuleType(modname)
+                exec(compile(src_fixed, str(extractor_path), 'exec'), module.__dict__)
+                sys.modules[modname] = module
+
             from HoyoPckExtractor import PCKextract
             from BNKcompiler import BNK
         except Exception as e:
@@ -245,8 +263,9 @@ def unpack_pck(tree_manager, parent, overlay: object = None) -> None:
                 except Exception as e:
                     logger.log("UNPACK", f"파일 기록 실패 {rel}: {e}")
 
-            # 추출 결과를 스토리지에 저장 (pck -> wem / bnk 구조)
-            listing = {"wem": wem_list, "bnk": bnk_list}
+            # 추출 결과를 스토리지에 저장 (pck -> files / bnk 구조)
+            # 'files' 리스트에는 wem이나 wav 등 파일 항목이 들어갑니다.
+            listing = {"files": wem_list, "bnk": bnk_list}
             try:
                 storage.set_unpack_result(f"{base_name}.pck", listing)
             except Exception as e:
