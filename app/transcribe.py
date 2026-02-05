@@ -9,12 +9,60 @@ import subprocess
 import shutil
 import glob
 import time
+import builtins
 
 # Ensure local `lib` is on path for packages installed with `pip --target=lib`
 HERE = Path(__file__).resolve().parent
 LIB_DIR = HERE.parent / "lib"
 if LIB_DIR.exists():
     sys.path.insert(0, str(LIB_DIR))
+
+# --- realtime logging: mirror prints to a UTF-8 log file immediately ---
+ROOT = HERE.parent
+LOG_DIR = ROOT / 'logs'
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+TRANS_LOG = LOG_DIR / 'transcribe.log'
+
+# If parent launcher sets this, child should NOT append to the log file
+# to avoid duplicate lines when the parent's capturing stdout/stderr.
+SKIP_CHILD_LOG = os.environ.get('TRANSCRIBE_SKIP_CHILD_LOG') == '1'
+
+_orig_print = builtins.print
+def print(*args, **kwargs):
+    """Module-local print wrapper: writes to stdout (flushed) and appends to `logs/transcribe.log` in UTF-8."""
+    # ensure flushed stdout for realtime console
+    kwargs.setdefault('flush', True)
+    try:
+        _orig_print(*args, **kwargs)
+    except Exception:
+        # if stdout problematic, ignore
+        pass
+
+    # Build text similar to builtin.print
+    sep = kwargs.get('sep', ' ')
+    end = kwargs.get('end', '\n')
+    try:
+        text = sep.join(str(a) for a in args) + end
+        # If the parent process is already capturing stdout/stderr into the
+        # same log file, avoid appending again from the child to prevent
+        # duplicated/garbled entries. Parent sets TRANSCRIBE_SKIP_CHILD_LOG=1.
+        if not SKIP_CHILD_LOG:
+            # append to log file as UTF-8
+            try:
+                with open(TRANS_LOG, 'a', encoding='utf-8') as lf:
+                    lf.write(text)
+                    lf.flush()
+            except Exception:
+                # fallback: try cp949 for Windows ANSI logs
+                try:
+                    with open(TRANS_LOG, 'a', encoding='cp949', errors='replace') as lf:
+                        lf.write(text)
+                        lf.flush()
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
 
 
 def run_pip_install_target():
@@ -358,4 +406,6 @@ def main():
 
 
 if __name__ == '__main__':
+    print('작업 시작')
     main()
+    print('작업 종료')

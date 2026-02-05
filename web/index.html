@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Wav Whisper — Local GUI</title>
+    <title>PCK Audio Finder — Local GUI</title>
     <style>
       body{font-family:Segoe UI,Arial;margin:20px}
       .tabs{display:flex;gap:8px;margin-bottom:12px}
@@ -17,7 +17,7 @@
     </style>
   </head>
   <body>
-    <h2>Wav Whisper — Local GUI</h2>
+    <h2>PCK Audio Finder — Local GUI</h2>
 
     <div class="tabs" role="tablist">
       <div class="tab" data-tab="tab1">pck언팩</div>
@@ -87,27 +87,81 @@
         return res.json();
       }
 
+      const ta = document.getElementById('log');
+      const btnStart = document.getElementById('start');
+      const btnStop = document.getElementById('stop');
+
+      function setButtons(running){
+        if(running){
+          btnStart.disabled = true;
+          btnStop.disabled = false;
+        }else{
+          btnStart.disabled = false;
+          btnStop.disabled = true;
+        }
+      }
+
       document.getElementById('start').addEventListener('click', async ()=>{
         const form = document.getElementById('ctl');
         const data = Object.fromEntries(new FormData(form).entries());
-        await post('/start', data);
+        const res = await post('/start', data);
+        if(res){
+          // server returns log snapshot and started flag
+          setButtons(!!res.started);
+          if(typeof res.log === 'string'){
+            ta.value = res.log || '';
+            ta.scrollTop = ta.scrollHeight;
+          }
+        }
       });
 
       document.getElementById('stop').addEventListener('click', async ()=>{
-        await post('/stop', {});
+        const res = await post('/stop', {});
+        if(res){
+          setButtons(!res.stopped ? true : false);
+          if(typeof res.log === 'string'){
+            ta.value = res.log || '';
+            ta.scrollTop = ta.scrollHeight;
+          }
+        }
       });
 
-      async function poll(){
-        try{
-          const res = await fetch('/status');
-          const j = await res.json();
-          document.getElementById('log').value = j.log || '';
-        }catch(e){
-          // ignore
+      // Realtime log streaming via Server-Sent Events (SSE)
+      (function(){
+        const ta = document.getElementById('log');
+        function appendLine(line){
+          ta.value += line + '\n';
+          // keep tail
+          if(ta.value.length > 200000) ta.value = ta.value.slice(-200000);
+          ta.scrollTop = ta.scrollHeight;
         }
-      }
-      setInterval(poll, 1500);
-      poll();
+
+        // Initially fetch existing log snapshot and running state for immediate UI
+        fetch('/status').then(r=>r.json()).then(j=>{
+          ta.value = j.log || '';
+          ta.scrollTop = ta.scrollHeight;
+          setButtons(!!j.running);
+        }).catch(()=>{});
+
+        // Periodically poll status to keep button state in sync if process ends
+        setInterval(async ()=>{
+          try{ const r = await fetch('/status'); const j = await r.json(); setButtons(!!j.running); }catch(e){}
+        }, 1500);
+
+        let es;
+        try{
+          es = new EventSource('/logs/stream');
+          es.onmessage = (e)=>{ appendLine(e.data); };
+          es.onerror = ()=>{
+            // try reconnect: EventSource auto-reconnects by default
+          };
+        }catch(err){
+          // fallback: keep polling if SSE unsupported
+          setInterval(async ()=>{
+            try{ const r = await fetch('/status'); const j = await r.json(); ta.value = j.log || ''; ta.scrollTop = ta.scrollHeight;}catch(e){}
+          }, 1500);
+        }
+      })();
     </script>
   </body>
 </html>
