@@ -129,6 +129,6 @@ Desktop.ini
 .env.*.local
 
 # User Files
-config.ini
-data/
-input_pck/
+runtime/
+logs/
+input/

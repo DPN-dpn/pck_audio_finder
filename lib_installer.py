@@ -117,12 +117,19 @@ def ensure_libs(specs=None):
     This function is safe to call repeatedly; it will skip existing non-empty targets.
     """
     specs = specs or LIB_SPECS
-    # Use project root (two parents up from this file) so installer works
+    # Use project root (parent of this file) as base so installer works
     # regardless of the current working directory when invoked.
-    base = Path(__file__).resolve().parents[2]
+    base = Path(__file__).resolve().parent
+    runtime_site = base / 'runtime' / 'Lib' / 'site-packages'
     _log(f"Installer base directory: {base}")
+    _log(f"Target runtime site-packages: {runtime_site}")
     for s in specs:
-        dest = base / s.get("dest", "")
+        raw_dest = s.get("dest", "")
+        # If spec.dest was given under 'lib/...' strip that prefix so we
+        # install directly under runtime/Lib/site-packages.
+        if raw_dest.startswith('lib/'):
+            raw_dest = raw_dest[len('lib/'):]
+        dest = runtime_site / raw_dest
         _log(f"Ensuring library at {dest}")
         if dest.exists() and any(dest.iterdir()):
             _log(f"Skipping existing {dest}")

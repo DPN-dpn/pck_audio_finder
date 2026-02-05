@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Wav Whisper — Local GUI</title>
+    <style>
+      body{font-family:Segoe UI,Arial;margin:20px}
+      .tabs{display:flex;gap:8px;margin-bottom:12px}
+      .tab{padding:8px 12px;border:1px solid #ccc;border-bottom:none;cursor:pointer;background:#f5f5f5}
+      .tab.active{background:#fff;font-weight:600}
+      .panel{border:1px solid #ccc;padding:12px}
+      label{display:block;margin-top:8px}
+      textarea{width:100%;height:300px}
+      .row{display:flex;gap:8px}
+      .muted{color:#666;font-size:0.95em}
+    </style>
+  </head>
+  <body>
+    <h2>Wav Whisper — Local GUI</h2>
+
+    <div class="tabs" role="tablist">
+      <div class="tab" data-tab="tab1">pck언팩</div>
+      <div class="tab" data-tab="tab2">wem 변환</div>
+      <div class="tab active" data-tab="tab3">wav 매핑</div>
+      <div class="tab" data-tab="tab4">맵 필터링</div>
+    </div>
+
+    <div id="tab1" class="panel" style="display:none">
+      <h3>pck언팩</h3>
+      <p class="muted">여기에 pck 파일 언팩 관련 옵션과 실행 버튼을 배치하세요.</p>
+      <p>현재는 자리 표시자입니다.</p>
+    </div>
+
+    <div id="tab2" class="panel" style="display:none">
+      <h3>wem 변환</h3>
+      <p class="muted">wem → wav 변환 옵션과 상태 표시를 이 탭에 넣으세요.</p>
+      <p>현재는 자리 표시자입니다.</p>
+    </div>
+
+    <div id="tab3" class="panel">
+      <h3>wav 매핑</h3>
+      <!-- 기존 기능: transcribe 컨트롤 및 로그는 이 탭에 위치합니다. -->
+      <form id="ctl">
+        <label>Input folder: <input name="input" value="input"/></label>
+        <label>Output TSV: <input name="tsv" value="results.tsv"/></label>
+        <label>Model: <input name="model" value="small"/></label>
+        <label>Device: 
+          <select name="device">
+            <option value="cpu">cpu</option>
+            <option value="cuda">cuda</option>
+          </select>
+        </label>
+        <label>Runtime folder: <input name="runtime" value="runtime"/></label>
+        <div class="row" style="margin-top:10px">
+          <button id="start" type="button">Start</button>
+          <button id="stop" type="button">Stop</button>
+        </div>
+      </form>
+
+      <h3>Log</h3>
+      <textarea id="log" readonly></textarea>
+    </div>
+
+    <div id="tab4" class="panel" style="display:none">
+      <h3>맵 필터링</h3>
+      <p class="muted">맵 필터 규칙을 적용하거나 미리보기할 수 있는 도구 영역입니다.</p>
+      <p>현재는 자리 표시자입니다.</p>
+    </div>
+
+    <script>
+      // Tab switching
+      const tabs = document.querySelectorAll('.tab');
+      tabs.forEach(t=>t.addEventListener('click', ()=>{
+        document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+        t.classList.add('active');
+        const which = t.getAttribute('data-tab');
+        ['tab1','tab2','tab3','tab4'].forEach(id=>{
+          const el = document.getElementById(id);
+          if(!el) return;
+          el.style.display = (id===which)?'block':'none';
+        });
+      }));
+
+      async function post(path, data){
+        const res = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(data)});
+        return res.json();
+      }
+
+      document.getElementById('start').addEventListener('click', async ()=>{
+        const form = document.getElementById('ctl');
+        const data = Object.fromEntries(new FormData(form).entries());
+        await post('/start', data);
+      });
+
+      document.getElementById('stop').addEventListener('click', async ()=>{
+        await post('/stop', {});
+      });
+
+      async function poll(){
+        try{
+          const res = await fetch('/status');
+          const j = await res.json();
+          document.getElementById('log').value = j.log || '';
+        }catch(e){
+          // ignore
+        }
+      }
+      setInterval(poll, 1500);
+      poll();
+    </script>
+  </body>
+</html>

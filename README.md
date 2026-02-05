@@ -13,6 +13,14 @@ pck2wav, mapping, filtering
 ### 2. 
 ### 3. 
 
+
+# 사용된 라이브러리
+- [HoyoAudioTools](https://github.com/failsafe42/HoyoAudioTools) (PCK 언팩)
+- [vgmstream](https://github.com/vgmstream/vgmstream) (WAV 변환)
+- [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (매핑)
+- [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) (구성 참고)
+
+
 # 라이센스
 This project is licensed under the [MIT License](LICENSE).
 
