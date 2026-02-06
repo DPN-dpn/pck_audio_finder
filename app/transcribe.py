@@ -316,6 +316,12 @@ def main():
     # ensure deps and check for CUDA runtime first
     has_cublas = ensure_dependencies_and_check_cuda()
 
+    # Diagnostic print: show requested device only
+    try:
+        print('요청 장치:', args.device)
+    except Exception:
+        pass
+
     # if requested cuda but no runtime, fallback to cpu
     if args.device == 'cuda' and not has_cublas:
         print('CUDA 런타임을 찾을 수 없어 자동으로 CPU로 폴백합니다.')
@@ -342,18 +348,19 @@ def main():
     print(f'작업 스레드(프로세스) 수: {workers}')
 
     files = list(find_wavs(input_dir))
+    total = len(files)
     if not files:
         print('처리할 wav 파일이 없습니다.')
         return
 
     # Filter out files that already have corresponding .srt -> skip
     to_process = []
-    for p in files:
+    for idx, p in enumerate(files, start=1):
         srt_path = p.with_suffix('.srt')
         if srt_path.exists():
-            print('이미 처리되어 스킵:', p)
+            print(f'[{idx}/{total}] 이미 처리되어 스킵: {p}')
             continue
-        to_process.append(p)
+        to_process.append((idx, p))
 
     if not to_process:
         print('처리할 새 파일이 없습니다.')
@@ -362,10 +369,10 @@ def main():
     # Start process pool
     try:
         with ProcessPoolExecutor(max_workers=workers, initializer=init_model, initargs=(args.model, args.device, args.compute_type)) as exe:
-            futures = {exe.submit(transcribe_file, p): p for p in to_process}
+            futures = {exe.submit(transcribe_file, p): (idx, p) for idx, p in to_process}
             try:
                 for fut in as_completed(futures):
-                    src_path = futures[fut]
+                    src_idx, src_path = futures[fut]
                     try:
                         res = fut.result()
                     except KeyboardInterrupt:
@@ -395,7 +402,7 @@ def main():
 
                     row = [filename, rel.replace('\\', '/'), res['classification'], language, subtitles]
                     write_tsv_line(tsv_path, row)
-                    print('완료:', rel)
+                    print(f'[{src_idx}/{total}] 완료: {rel}')
             except KeyboardInterrupt:
                 print('\n중단 요청 감지: 진행 중인 작업을 취소합니다...')
                 # Attempt to cancel running futures and shutdown pool

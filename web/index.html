@@ -20,28 +20,47 @@
     <h2>PCK Audio Finder — Local GUI</h2>
 
     <div class="tabs" role="tablist">
-      <div class="tab" data-tab="tab1">pck언팩</div>
-      <div class="tab" data-tab="tab2">wem 변환</div>
-      <div class="tab active" data-tab="tab3">wav 매핑</div>
-      <div class="tab" data-tab="tab4">맵 필터링</div>
+      <div class="tab" data-tab="tab1" data-task="unpack">pck언팩</div>
+      <div class="tab" data-tab="tab2" data-task="convert">wem 변환</div>
+      <div class="tab active" data-tab="tab3" data-task="transcribe">wav 매핑</div>
+      <div class="tab" data-tab="tab4" data-task="filter">맵 필터링</div>
     </div>
 
     <div id="tab1" class="panel" style="display:none">
       <h3>pck언팩</h3>
-      <p class="muted">여기에 pck 파일 언팩 관련 옵션과 실행 버튼을 배치하세요.</p>
-      <p>현재는 자리 표시자입니다.</p>
+      <form class="ctl-form">
+        <label>Input folder: <input name="input" value="input"/></label>
+        <label>Output base: <input name="output" value="unpacked"/></label>
+        <label>Runtime folder: <input name="runtime" value="runtime"/></label>
+        <label>Workers: <input name="workers" value="0"/></label>
+        <div class="row" style="margin-top:10px">
+          <button type="button" class="start-btn">Start</button>
+          <button type="button" class="stop-btn">Stop</button>
+        </div>
+      </form>
+      <p class="muted">pck 파일을 찾아 자동으로 언팩하고 .bnk 내부도 추출합니다.</p>
     </div>
 
     <div id="tab2" class="panel" style="display:none">
       <h3>wem 변환</h3>
-      <p class="muted">wem → wav 변환 옵션과 상태 표시를 이 탭에 넣으세요.</p>
-      <p>현재는 자리 표시자입니다.</p>
+      <form class="ctl-form">
+        <label>Input folder: <input name="input" value="input"/></label>
+        <label>Site-packages: <input name="site-packages" value="runtime\Lib\site-packages"/></label>
+        <label>Workers: <input name="workers" value="1"/></label>
+        <label><input type="checkbox" name="overwrite"/> Overwrite existing</label>
+        <label>Runtime folder: <input name="runtime" value="runtime"/></label>
+        <div class="row" style="margin-top:10px">
+          <button type="button" class="start-btn">Start</button>
+          <button type="button" class="stop-btn">Stop</button>
+        </div>
+      </form>
+      <p class="muted">폴더 내 모든 .wem 파일을 찾아 .wav로 변환합니다.</p>
     </div>
 
     <div id="tab3" class="panel">
       <h3>wav 매핑</h3>
       <!-- 기존 기능: transcribe 컨트롤 및 로그는 이 탭에 위치합니다. -->
-      <form id="ctl">
+      <form id="ctl" class="ctl-form">
         <label>Input folder: <input name="input" value="input"/></label>
         <label>Output TSV: <input name="tsv" value="results.tsv"/></label>
         <label>Model: <input name="model" value="small"/></label>
@@ -53,8 +72,8 @@
         </label>
         <label>Runtime folder: <input name="runtime" value="runtime"/></label>
         <div class="row" style="margin-top:10px">
-          <button id="start" type="button">Start</button>
-          <button id="stop" type="button">Stop</button>
+          <button type="button" class="start-btn" id="start">Start</button>
+          <button type="button" class="stop-btn" id="stop">Stop</button>
         </div>
       </form>
 
@@ -69,17 +88,49 @@
     </div>
 
     <script>
-      // Tab switching
+      // Tab switching and task-aware log streaming
       const tabs = document.querySelectorAll('.tab');
-      tabs.forEach(t=>t.addEventListener('click', ()=>{
-        document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
-        t.classList.add('active');
-        const which = t.getAttribute('data-tab');
+      let es = null;
+      function getActiveTask(){
+        const tab = document.querySelector('.tab.active');
+        return tab ? tab.getAttribute('data-task') || 'transcribe' : 'transcribe';
+      }
+
+      function showTab(which){
         ['tab1','tab2','tab3','tab4'].forEach(id=>{
           const el = document.getElementById(id);
           if(!el) return;
           el.style.display = (id===which)?'block':'none';
         });
+      }
+
+      function getActiveTabId(){
+        const tab = document.querySelector('.tab.active');
+        return tab ? tab.getAttribute('data-tab') : null;
+      }
+
+      function getActivePanel(){
+        const id = getActiveTabId();
+        return id ? document.getElementById(id) : null;
+      }
+
+      function openLogStreamFor(task){
+        if(es){ try{ es.close(); }catch(e){} es = null; }
+        try{
+          es = new EventSource('/logs/stream?task='+encodeURIComponent(task));
+          es.onmessage = (e)=>{ appendLine(e.data); };
+          es.onerror = ()=>{};
+        }catch(err){ es = null; }
+      }
+
+      tabs.forEach(t=>t.addEventListener('click', ()=>{
+        document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+        t.classList.add('active');
+        const which = t.getAttribute('data-tab');
+        showTab(which);
+        const task = getActiveTask();
+        // refresh status/log and stream for this task
+        fetchStatusAndStream(task);
       }));
 
       async function post(path, data){
@@ -88,35 +139,46 @@
       }
 
       const ta = document.getElementById('log');
-      const btnStart = document.getElementById('start');
-      const btnStop = document.getElementById('stop');
 
       function setButtons(running){
+        const panel = getActivePanel();
+        if(!panel) return;
+        const startBtn = panel.querySelector('.start-btn');
+        const stopBtn = panel.querySelector('.stop-btn');
         if(running){
-          btnStart.disabled = true;
-          btnStop.disabled = false;
+          if(startBtn) startBtn.disabled = true;
+          if(stopBtn) stopBtn.disabled = false;
         }else{
-          btnStart.disabled = false;
-          btnStop.disabled = true;
+          if(startBtn) startBtn.disabled = false;
+          if(stopBtn) stopBtn.disabled = true;
         }
       }
 
-      document.getElementById('start').addEventListener('click', async ()=>{
-        const form = document.getElementById('ctl');
-        const data = Object.fromEntries(new FormData(form).entries());
+      // start buttons (one per tab)
+      document.querySelectorAll('.start-btn').forEach(btn=>btn.addEventListener('click', async ()=>{
+        const activeTask = getActiveTask();
+        const panel = getActivePanel();
+        const form = panel ? panel.querySelector('.ctl-form') || panel.querySelector('form') : null;
+        const data = form ? Object.fromEntries(new FormData(form).entries()) : {};
+        data.task = activeTask;
+        // normalize checkbox value
+        if(form){
+          const ow = form.querySelector('input[name="overwrite"]');
+          if(ow) data.overwrite = ow.checked;
+        }
         const res = await post('/start', data);
         if(res){
-          // server returns log snapshot and started flag
           setButtons(!!res.started);
           if(typeof res.log === 'string'){
             ta.value = res.log || '';
             ta.scrollTop = ta.scrollHeight;
           }
         }
-      });
+      }));
 
-      document.getElementById('stop').addEventListener('click', async ()=>{
-        const res = await post('/stop', {});
+      document.querySelectorAll('.stop-btn').forEach(btn=>btn.addEventListener('click', async ()=>{
+        const activeTask = getActiveTask();
+        const res = await post('/stop', {task: activeTask});
         if(res){
           setButtons(!res.stopped ? true : false);
           if(typeof res.log === 'string'){
@@ -124,7 +186,7 @@
             ta.scrollTop = ta.scrollHeight;
           }
         }
-      });
+      }));
 
       // Realtime log streaming via Server-Sent Events (SSE)
       (function(){
@@ -136,29 +198,35 @@
           ta.scrollTop = ta.scrollHeight;
         }
 
-        // Initially fetch existing log snapshot and running state for immediate UI
-        fetch('/status').then(r=>r.json()).then(j=>{
-          ta.value = j.log || '';
-          ta.scrollTop = ta.scrollHeight;
-          setButtons(!!j.running);
-        }).catch(()=>{});
+        // helper: fetch status for a task and open stream
+        async function fetchStatusAndStream(task){
+          try{
+            const r = await fetch('/status?task='+encodeURIComponent(task));
+            const j = await r.json();
+            ta.value = j.log || '';
+            ta.scrollTop = ta.scrollHeight;
+            setButtons(!!j.running);
+          }catch(e){ }
+          openLogStreamFor(task);
+        }
 
-        // Periodically poll status to keep button state in sync if process ends
+        // Initially load status/stream for the default active task
+        fetchStatusAndStream(getActiveTask());
+
+        // Periodically poll status for active task to keep button state in sync
         setInterval(async ()=>{
-          try{ const r = await fetch('/status'); const j = await r.json(); setButtons(!!j.running); }catch(e){}
+          try{
+            const task = getActiveTask();
+            const r = await fetch('/status?task='+encodeURIComponent(task));
+            const j = await r.json();
+            setButtons(!!j.running);
+          }catch(e){}
         }, 1500);
 
-        let es;
-        try{
-          es = new EventSource('/logs/stream');
-          es.onmessage = (e)=>{ appendLine(e.data); };
-          es.onerror = ()=>{
-            // try reconnect: EventSource auto-reconnects by default
-          };
-        }catch(err){
-          // fallback: keep polling if SSE unsupported
+        // fallback if EventSource not available: poll logs into textarea
+        if(typeof(EventSource) === 'undefined'){
           setInterval(async ()=>{
-            try{ const r = await fetch('/status'); const j = await r.json(); ta.value = j.log || ''; ta.scrollTop = ta.scrollHeight;}catch(e){}
+            try{ const task = getActiveTask(); const r = await fetch('/status?task='+encodeURIComponent(task)); const j = await r.json(); ta.value = j.log || ''; ta.scrollTop = ta.scrollHeight;}catch(e){}
           }, 1500);
         }
       })();
