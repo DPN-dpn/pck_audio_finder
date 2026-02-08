@@ -8,9 +8,10 @@ import os
 HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
-from run_transcription import start_transcription, get_status as get_status_transcribe, stop_transcription, LOG_FILE as LOG_FILE_TRANSCRIBE
-from run_unpack import start_unpack, get_status as get_status_unpack, stop_unpack, LOG_FILE as LOG_FILE_UNPACK
-from run_convert import start_convert, get_status as get_status_convert, stop_convert, LOG_FILE as LOG_FILE_CONVERT
+from run_transcription import start_transcription, get_status as get_status_transcribe, stop_transcription
+from run_unpack import start_unpack, get_status as get_status_unpack, stop_unpack
+from run_convert import start_convert, get_status as get_status_convert, stop_convert
+import logging_helper as lg
 
 app = Flask(__name__, template_folder='../web', static_folder='static')
 
@@ -75,57 +76,42 @@ def stop():
 
 @app.route('/logs/stream')
 def stream_logs():
+    # stream_logs does not require a per-task log file selection anymore
+
     def generate():
         import time
-        last_pos = 0
-        first_seen = False
-        # If file not exist yet, wait until it appears
-        while True:
+        # On connect, send entire current log so client has context, then
+        # afterwards send only the newly appended portion using a file offset.
+        try:
+            # initial full content
+            full = lg.read_all()
+            if full:
+                for ln in full.splitlines(True):
+                    yield f"data: {ln.rstrip()}\n\n"
+
+            # track current file offset (in bytes)
             try:
-                # choose log file based on query param
-                from urllib.parse import urlparse, parse_qs
-                q = urlparse(request.environ.get('RAW_URI', request.environ.get('REQUEST_URI', ''))).query
-                task = parse_qs(q).get('task', ['transcribe'])[0]
-                use_log = LOG_FILE_TRANSCRIBE
-                if task == 'unpack':
-                    use_log = LOG_FILE_UNPACK
-                elif task == 'convert':
-                    use_log = LOG_FILE_CONVERT
-
-                if use_log.exists():
-                    size = use_log.stat().st_size
-                    if size < last_pos:
-                        last_pos = 0
-                    with open(use_log, 'rb') as f:
-                        if not first_seen:
-                            f.seek(0, 2)
-                            last_pos = f.tell()
-                            first_seen = True
-                        else:
-                            f.seek(last_pos)
-
-                        data = f.read()
-                        last_pos = f.tell()
-                        if data:
-                            text = None
-                            try:
-                                text = data.decode('utf-8')
-                            except Exception:
-                                try:
-                                    text = data.decode('cp949')
-                                except Exception:
-                                    try:
-                                        text = data.decode('euc-kr')
-                                    except Exception:
-                                        text = data.decode('latin1', errors='replace')
-
-                            for ln in text.splitlines(True):
-                                yield f"data: {ln.rstrip()}\n\n"
-                time.sleep(0.5)
-            except GeneratorExit:
-                break
+                pos = lg.LOG_FILE.stat().st_size if lg.LOG_FILE.exists() else 0
             except Exception:
-                time.sleep(0.5)
+                pos = 0
+
+            # Wait for notifications from logging_helper and then send only the
+            # newly appended bytes decoded via `read_from`.
+            while True:
+                got = lg.wait_notification(timeout=0.5)
+                if not got:
+                    continue
+                try:
+                    chunk, pos = lg.read_from(pos)
+                except Exception:
+                    chunk = ''
+                if chunk:
+                    for ln in chunk.splitlines(True):
+                        yield f"data: {ln.rstrip()}\n\n"
+        except GeneratorExit:
+            return
+        except Exception:
+            return
     # Ensure charset in header so browsers interpret bytes as UTF-8
     headers = {'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache'}
     return Response(generate(), headers=headers)
@@ -133,23 +119,17 @@ def stream_logs():
 
 @app.route('/shutdown', methods=['POST'])
 def shutdown():
-    # Try to use the Werkzeug server shutdown function when available
-    try:
-        func = request.environ.get('werkzeug.server.shutdown')
-        if func:
+    func = request.environ.get('werkzeug.server.shutdown')
+    if callable(func):
+        try:
             func()
             return jsonify({'shutdown': True})
-    except Exception:
-        pass
-
-    # Fallback: exit in a background thread to avoid blocking the request
-    def _exit():
-        try:
-            os._exit(0)
         except Exception:
+            # If Werkzeug shutdown fails, fall back to os._exit()
             pass
 
-    threading.Thread(target=_exit, daemon=True).start()
+    # Fallback: exit in a background thread to avoid blocking the request
+    threading.Thread(target=lambda: os._exit(0), daemon=True).start()
     return jsonify({'shutdown': True})
 
 

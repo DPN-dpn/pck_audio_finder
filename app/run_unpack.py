@@ -1,81 +1,34 @@
-import subprocess
-import threading
 import os
 import sys
 from pathlib import Path
-import logging_helper as lg
+from task_runner import TaskProcess
 
 ROOT = Path(__file__).resolve().parents[1]
-LOG_FILE = lg.LOG_FILE
 
-_proc = None
-_lock = threading.Lock()
+_runner = TaskProcess('unpack')
 
-
-def _monitor_proc(cmd, cwd, env=None):
-    global _proc
-    lf = None
-    try:
-        lf = lg.open_log_file('ab')
-        _proc = subprocess.Popen(cmd, cwd=cwd, stdout=lf, stderr=subprocess.STDOUT, env=env)
-        _proc.wait()
-    finally:
-        _proc = None
-        if lf:
-            try:
-                lf.close()
-            except Exception:
-                pass
 
 
 def start_unpack(input_dir='input', out_base='unpacked', runtime=None, workers=0):
-    global _proc
-    with _lock:
-        if _proc is not None and _proc.poll() is None:
-            return False
+    runtime_python = ROOT / runtime / 'python.exe' if runtime else Path(sys.executable)
+    if runtime and not runtime_python.exists():
+        runtime_python = Path(sys.executable)
 
-        runtime_python = ROOT / runtime / 'python.exe' if runtime else Path(sys.executable)
-        if runtime and not runtime_python.exists():
-            runtime_python = Path(sys.executable)
+    cmd = [str(runtime_python), str(ROOT / 'app' / 'unpack_pck.py'),
+           '--input', str(input_dir), '--output', str(out_base), '--workers', str(workers)]
 
-        cmd = [str(runtime_python), str(ROOT / 'app' / 'unpack_pck.py'),
-               '--input', str(input_dir), '--output', str(out_base), '--workers', str(workers)]
-
-        # append start header (do not erase previous logs)
-        lg.write_start('unpack')
-
-        env = os.environ.copy()
-        env['PYTHONUTF8'] = '1'
-        env['PYTHONIOENCODING'] = 'utf-8'
-        t = threading.Thread(target=_monitor_proc, args=(cmd, str(ROOT), env), daemon=True)
-        t.start()
-        return True
+    env = os.environ.copy()
+    env['PYTHONUTF8'] = '1'
+    env['PYTHONIOENCODING'] = 'utf-8'
+    return _runner.start(cmd, str(ROOT), env=env)
 
 
 def get_status():
-    running = False
-    with _lock:
-        if _proc is not None and _proc.poll() is None:
-            running = True
-
-    tail = lg.read_tail(20000)
-    return {'running': running, 'log': tail}
+    return _runner.get_status()
 
 
 def stop_unpack():
-    global _proc
-    with _lock:
-        if _proc and _proc.poll() is None:
-            try:
-                try:
-                    lg.write_stop('unpack')
-                except Exception:
-                    pass
-                _proc.terminate()
-                return True
-            except Exception:
-                return False
-    return False
+    return _runner.stop()
 
 
 if __name__ == '__main__':

@@ -159,7 +159,7 @@ def main():
 
     input_dir = Path(args.input)
     if not input_dir.exists():
-        print('입력 폴더가 없습니다:', input_dir)
+        print('입력 폴더가 없습니다:', input_dir, flush=True)
         return
 
     out_base = Path(args.output)
@@ -173,11 +173,16 @@ def main():
 
     files = list(find_pcks(input_dir))
     if not files:
-        print('처리할 pck 파일이 없습니다.')
+        print('처리할 pck 파일이 없습니다.', flush=True)
         return
 
     workers = args.workers or max(1, multiprocessing.cpu_count())
-    print(f'발견된 pck 파일: {len(files)}, 작업 스레드: {workers}')
+    # Ensure stdout is flushed promptly when run as a subprocess
+    try:
+        os.environ.setdefault('PYTHONUNBUFFERED', '1')
+    except Exception:
+        pass
+    print(f'발견된 pck 파일: {len(files)}, 작업 스레드: {workers}', flush=True)
 
     results = []
     total = len(files)
@@ -190,11 +195,26 @@ def main():
                 ok, msg = fut.result()
                 # Normalize message prefix
                 if ok:
-                    print(f'[{done}/{total}] {msg}')
+                    print(f'[{done}/{total}] {msg}', flush=True)
                 else:
-                    print(f'[{done}/{total}] 오류: {msg}')
+                    print(f'[{done}/{total}] 오류: {msg}', flush=True)
         except KeyboardInterrupt:
-            print('\n중단 요청 감지: 진행 중인 작업을 취소합니다...')
+            print('\n중단 요청 감지: 진행 중인 작업을 취소합니다...', flush=True)
+
+    # If the provided out_base directory was created but no files were written into it,
+    # remove it to avoid leaving an unused 'unpacked' folder behind.
+    try:
+        if out_base.exists() and out_base.is_dir():
+            # remove only if directory is empty
+            if not any(out_base.iterdir()):
+                try:
+                    out_base.rmdir()
+                    print(f'빈 출력 폴더 제거: {out_base}', flush=True)
+                except Exception:
+                    # ignore failures to remove
+                    pass
+    except Exception:
+        pass
 
 
 if __name__ == '__main__':

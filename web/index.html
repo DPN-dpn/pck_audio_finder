@@ -126,6 +126,17 @@
           gl.style.display = visible ? 'block' : 'none';
         }
 
+        // global helper to append a line to the shared log textarea
+        window.appendLine = function(line){
+          try{
+            const ta = document.getElementById('log');
+            if(!ta) return;
+            ta.value += line + '\n';
+            if(ta.value.length > 200000) ta.value = ta.value.slice(-200000);
+            ta.scrollTop = ta.scrollHeight;
+          }catch(e){ }
+        }
+
       function openLogStreamFor(task){
         // do not open stream for the filter tab; ensure stream closed
         if(task === 'filter'){
@@ -135,12 +146,12 @@
         if(es){ try{ es.close(); }catch(e){} es = null; }
         try{
           es = new EventSource('/logs/stream?task='+encodeURIComponent(task));
-          es.onmessage = (e)=>{ appendLine(e.data); };
+          es.onmessage = (e)=>{ window.appendLine(e.data); };
           es.onerror = ()=>{};
         }catch(err){ es = null; }
       }
 
-      tabs.forEach(t=>t.addEventListener('click', ()=>{
+        tabs.forEach(t=>t.addEventListener('click', ()=>{
         document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
         t.classList.add('active');
         const which = t.getAttribute('data-tab');
@@ -152,7 +163,7 @@
           if(es){ try{ es.close(); }catch(e){} es = null; }
         }else{
           setGlobalLogVisible(true);
-          fetchStatusAndStream(task);
+          window.fetchStatusAndStream(task);
         }
       }));
 
@@ -245,7 +256,7 @@
         }
 
         // helper: fetch status for a task and open stream
-        async function fetchStatusAndStream(task){
+        window.fetchStatusAndStream = async function(task){
           // skip fetching status for filter tab
           if(task === 'filter'){
             ta.value = '';
@@ -269,7 +280,7 @@
           setGlobalLogVisible(false);
         }else{
           setGlobalLogVisible(true);
-          fetchStatusAndStream(getActiveTask());
+          window.fetchStatusAndStream(getActiveTask());
         }
 
         // Periodically poll status for active task to keep button state in sync

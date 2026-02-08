@@ -6,10 +6,9 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 import traceback
 import subprocess
-import shutil
 import glob
-import time
 import builtins
+import logging
 
 # Ensure local `lib` is on path for packages installed with `pip --target=lib`
 HERE = Path(__file__).resolve().parent
@@ -28,14 +27,27 @@ TRANS_LOG = LOG_DIR / 'transcribe.log'
 SKIP_CHILD_LOG = os.environ.get('TRANSCRIBE_SKIP_CHILD_LOG') == '1'
 
 _orig_print = builtins.print
+# Configure module logger that can write to TRANS_LOG when appropriate.
+logger = logging.getLogger('pck_transcribe')
+logger.setLevel(logging.INFO)
+logger.propagate = False
+if not SKIP_CHILD_LOG:
+    # Add a file handler writing UTF-8 if child is expected to log locally
+    if not any(isinstance(h, logging.FileHandler) and getattr(h, 'baseFilename', None) == str(TRANS_LOG) for h in logger.handlers):
+        try:
+            fh = logging.FileHandler(TRANS_LOG, encoding='utf-8')
+            fh.setFormatter(logging.Formatter('%(message)s'))
+            logger.addHandler(fh)
+        except Exception:
+            pass
+
+
 def print(*args, **kwargs):
-    """Module-local print wrapper: writes to stdout (flushed) and appends to `logs/transcribe.log` in UTF-8."""
-    # ensure flushed stdout for realtime console
+    """Module-local print wrapper: writes to stdout (flushed) and optionally logs to `logs/transcribe.log`."""
     kwargs.setdefault('flush', True)
     try:
         _orig_print(*args, **kwargs)
     except Exception:
-        # if stdout problematic, ignore
         pass
 
     # Build text similar to builtin.print
@@ -43,23 +55,12 @@ def print(*args, **kwargs):
     end = kwargs.get('end', '\n')
     try:
         text = sep.join(str(a) for a in args) + end
-        # If the parent process is already capturing stdout/stderr into the
-        # same log file, avoid appending again from the child to prevent
-        # duplicated/garbled entries. Parent sets TRANSCRIBE_SKIP_CHILD_LOG=1.
         if not SKIP_CHILD_LOG:
-            # append to log file as UTF-8
             try:
-                with open(TRANS_LOG, 'a', encoding='utf-8') as lf:
-                    lf.write(text)
-                    lf.flush()
+                logger.info(text.rstrip('\n'))
             except Exception:
-                # fallback: try cp949 for Windows ANSI logs
-                try:
-                    with open(TRANS_LOG, 'a', encoding='cp949', errors='replace') as lf:
-                        lf.write(text)
-                        lf.flush()
-                except Exception:
-                    pass
+                # best-effort only
+                pass
     except Exception:
         pass
 
