@@ -3,11 +3,10 @@ import threading
 import os
 import sys
 from pathlib import Path
+import logging_helper as lg
 
 ROOT = Path(__file__).resolve().parents[1]
-LOG_DIR = ROOT / 'logs'
-LOG_DIR.mkdir(parents=True, exist_ok=True)
-LOG_FILE = LOG_DIR / 'convert.log'
+LOG_FILE = lg.LOG_FILE
 
 _proc = None
 _lock = threading.Lock()
@@ -15,10 +14,18 @@ _lock = threading.Lock()
 
 def _monitor_proc(cmd, cwd, env=None):
     global _proc
-    with open(LOG_FILE, 'ab') as lf:
+    lf = None
+    try:
+        lf = lg.open_log_file('ab')
         _proc = subprocess.Popen(cmd, cwd=cwd, stdout=lf, stderr=subprocess.STDOUT, env=env)
         _proc.wait()
-    _proc = None
+    finally:
+        _proc = None
+        if lf:
+            try:
+                lf.close()
+            except Exception:
+                pass
 
 
 def start_convert(input_dir='input', site_packages=None, workers=1, overwrite=False, runtime=None):
@@ -37,17 +44,8 @@ def start_convert(input_dir='input', site_packages=None, workers=1, overwrite=Fa
         if overwrite:
             cmd.append('--overwrite')
 
-        # clear previous log and write header
-        try:
-            from datetime import datetime
-            with open(LOG_FILE, 'w', encoding='utf-8') as lf:
-                lf.write(f"--- convert started: {datetime.now().isoformat()} ---\n")
-        except Exception:
-            try:
-                if LOG_FILE.exists():
-                    LOG_FILE.unlink()
-            except Exception:
-                pass
+        # append start header (do not erase previous logs)
+        lg.write_start('convert')
 
         env = os.environ.copy()
         env['PYTHONUTF8'] = '1'
@@ -63,22 +61,7 @@ def get_status():
         if _proc is not None and _proc.poll() is None:
             running = True
 
-    tail = ''
-    if LOG_FILE.exists():
-        try:
-            try:
-                with open(LOG_FILE, 'r', encoding='utf-8') as f:
-                    data = f.read()
-            except UnicodeDecodeError:
-                try:
-                    with open(LOG_FILE, 'r', encoding='cp949') as f:
-                        data = f.read()
-                except Exception:
-                    with open(LOG_FILE, 'r', encoding='latin1', errors='replace') as f:
-                        data = f.read()
-            tail = data[-20000:]
-        except Exception:
-            tail = ''
+    tail = lg.read_tail(20000)
     return {'running': running, 'log': tail}
 
 
@@ -88,10 +71,7 @@ def stop_convert():
         if _proc and _proc.poll() is None:
             try:
                 try:
-                    from datetime import datetime
-                    msg = f"--- convert stopped by user: {datetime.now().isoformat()} ---\n"
-                    with open(LOG_FILE, 'ab') as lf:
-                        lf.write(msg.encode('utf-8'))
+                    lg.write_stop('convert')
                 except Exception:
                     pass
                 _proc.terminate()

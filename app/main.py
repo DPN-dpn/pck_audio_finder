@@ -131,6 +131,28 @@ def stream_logs():
     return Response(generate(), headers=headers)
 
 
+@app.route('/shutdown', methods=['POST'])
+def shutdown():
+    # Try to use the Werkzeug server shutdown function when available
+    try:
+        func = request.environ.get('werkzeug.server.shutdown')
+        if func:
+            func()
+            return jsonify({'shutdown': True})
+    except Exception:
+        pass
+
+    # Fallback: exit in a background thread to avoid blocking the request
+    def _exit():
+        try:
+            os._exit(0)
+        except Exception:
+            pass
+
+    threading.Thread(target=_exit, daemon=True).start()
+    return jsonify({'shutdown': True})
+
+
 if __name__ == '__main__':
     # Use threaded server for simplicity; runs on localhost only
     app.run(host='127.0.0.1', port=5000, debug=True, threaded=True)

@@ -3,11 +3,10 @@ import threading
 import os
 import sys
 from pathlib import Path
+import logging_helper as lg
 
 ROOT = Path(__file__).resolve().parents[1]
-LOG_DIR = ROOT / 'logs'
-LOG_DIR.mkdir(parents=True, exist_ok=True)
-LOG_FILE = LOG_DIR / 'transcribe.log'
+LOG_FILE = lg.LOG_FILE
 
 _proc = None
 _lock = threading.Lock()
@@ -15,10 +14,18 @@ _lock = threading.Lock()
 
 def _monitor_proc(cmd, cwd, env=None):
     global _proc
-    with open(LOG_FILE, 'ab') as lf:
+    lf = None
+    try:
+        lf = lg.open_log_file('ab')
         _proc = subprocess.Popen(cmd, cwd=cwd, stdout=lf, stderr=subprocess.STDOUT, env=env)
         _proc.wait()
-    _proc = None
+    finally:
+        _proc = None
+        if lf:
+            try:
+                lf.close()
+            except Exception:
+                pass
 
 
 def start_transcription(input_dir='input', tsv='results.tsv', model='small', device='cpu', runtime='runtime'):
@@ -34,18 +41,8 @@ def start_transcription(input_dir='input', tsv='results.tsv', model='small', dev
                '--input', str(input_dir), '--tsv', str(tsv),
                '--model', model, '--device', device, '--runtime', runtime]
 
-        # clear previous log and write start header so UI shows a fresh log
-        try:
-            from datetime import datetime
-            with open(LOG_FILE, 'w', encoding='utf-8') as lf:
-                lf.write(f"--- transcription started: {datetime.now().isoformat()} ---\n")
-        except Exception:
-            # fallback: attempt to remove the file
-            try:
-                if LOG_FILE.exists():
-                    LOG_FILE.unlink()
-            except Exception:
-                pass
+        # append start header (do not erase previous logs)
+        lg.write_start('transcription')
 
         # Ensure child python uses UTF-8 output to avoid encoding garble on Windows.
         env = os.environ.copy()
@@ -66,29 +63,7 @@ def get_status():
         if _proc is not None and _proc.poll() is None:
             running = True
 
-    tail = ''
-    if LOG_FILE.exists():
-        try:
-            # Prefer UTF-8, but fall back to common Windows encodings if file is CP949 (ANSI)
-            try:
-                with open(LOG_FILE, 'r', encoding='utf-8') as f:
-                    data = f.read()
-            except UnicodeDecodeError:
-                try:
-                    with open(LOG_FILE, 'r', encoding='cp949') as f:
-                        data = f.read()
-                except Exception:
-                    try:
-                        with open(LOG_FILE, 'r', encoding='euc-kr') as f:
-                            data = f.read()
-                    except Exception:
-                        # last resort: latin1 -> preserves bytes
-                        with open(LOG_FILE, 'r', encoding='latin1', errors='replace') as f:
-                            data = f.read()
-
-            tail = data[-20000:]
-        except Exception:
-            tail = ''
+    tail = lg.read_tail(20000, encodings=['utf-8', 'cp949', 'euc-kr', 'latin1'])
     return {'running': running, 'log': tail}
 
 
@@ -99,10 +74,7 @@ def stop_transcription():
             try:
                 # Write stop marker to log so UI can display it immediately
                 try:
-                    from datetime import datetime
-                    msg = f"--- transcription stopped by user: {datetime.now().isoformat()} ---\n"
-                    with open(LOG_FILE, 'ab') as lf:
-                        lf.write(msg.encode('utf-8'))
+                    lg.write_stop('transcription')
                 except Exception:
                     pass
 

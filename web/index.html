@@ -19,6 +19,9 @@
   <body>
     <h2>PCK Audio Finder — Local GUI</h2>
 
+    <!-- Server shutdown button (local only) -->
+    <button id="shutdown-server" title="Stop local web server" style="position:fixed;top:12px;right:12px;padding:6px 10px;background:#c33;color:#fff;border:none;border-radius:4px;cursor:pointer;z-index:1000">서버 종료</button>
+
     <div class="tabs" role="tablist">
       <div class="tab" data-tab="tab1" data-task="unpack">pck언팩</div>
       <div class="tab" data-tab="tab2" data-task="convert">wem 변환</div>
@@ -76,15 +79,18 @@
           <button type="button" class="stop-btn" id="stop">Stop</button>
         </div>
       </form>
-
-      <h3>Log</h3>
-      <textarea id="log" readonly></textarea>
     </div>
 
     <div id="tab4" class="panel" style="display:none">
       <h3>맵 필터링</h3>
       <p class="muted">맵 필터 규칙을 적용하거나 미리보기할 수 있는 도구 영역입니다.</p>
       <p>현재는 자리 표시자입니다.</p>
+    </div>
+
+    <!-- 전역 로그: 탭과 상관없이 항상 보이도록 탭 영역 아래로 이동 -->
+    <div id="global-log" class="panel" style="margin-top:12px">
+      <h3>Log</h3>
+      <textarea id="log" readonly></textarea>
     </div>
 
     <script>
@@ -114,7 +120,18 @@
         return id ? document.getElementById(id) : null;
       }
 
+        function setGlobalLogVisible(visible){
+          const gl = document.getElementById('global-log');
+          if(!gl) return;
+          gl.style.display = visible ? 'block' : 'none';
+        }
+
       function openLogStreamFor(task){
+        // do not open stream for the filter tab; ensure stream closed
+        if(task === 'filter'){
+          if(es){ try{ es.close(); }catch(e){} es = null; }
+          return;
+        }
         if(es){ try{ es.close(); }catch(e){} es = null; }
         try{
           es = new EventSource('/logs/stream?task='+encodeURIComponent(task));
@@ -129,8 +146,14 @@
         const which = t.getAttribute('data-tab');
         showTab(which);
         const task = getActiveTask();
-        // refresh status/log and stream for this task
-        fetchStatusAndStream(task);
+        // hide log for filter tab, otherwise show and refresh status/stream
+        if(task === 'filter'){
+          setGlobalLogVisible(false);
+          if(es){ try{ es.close(); }catch(e){} es = null; }
+        }else{
+          setGlobalLogVisible(true);
+          fetchStatusAndStream(task);
+        }
       }));
 
       async function post(path, data){
@@ -176,6 +199,29 @@
         }
       }));
 
+      // Shutdown server button (local only)
+      const shutdownBtn = document.getElementById('shutdown-server');
+      if(shutdownBtn){
+        shutdownBtn.addEventListener('click', async ()=>{
+          if(!confirm('정말로 로컬 웹서버를 종료하시겠습니까?')) return;
+          try{
+            shutdownBtn.disabled = true;
+            shutdownBtn.textContent = '종료 중...';
+            const res = await fetch('/shutdown', {method: 'POST'});
+            try{ await res.json(); }catch(e){}
+            // give server a moment to stop
+            setTimeout(()=>{
+              shutdownBtn.textContent = '서버 종료됨';
+              shutdownBtn.disabled = true;
+            }, 500);
+          }catch(err){
+            alert('서버 종료 요청에 실패했습니다. 콘솔을 확인하세요.');
+            shutdownBtn.disabled = false;
+            shutdownBtn.textContent = '서버 종료';
+          }
+        });
+      }
+
       document.querySelectorAll('.stop-btn').forEach(btn=>btn.addEventListener('click', async ()=>{
         const activeTask = getActiveTask();
         const res = await post('/stop', {task: activeTask});
@@ -200,6 +246,14 @@
 
         // helper: fetch status for a task and open stream
         async function fetchStatusAndStream(task){
+          // skip fetching status for filter tab
+          if(task === 'filter'){
+            ta.value = '';
+            ta.scrollTop = ta.scrollHeight;
+            setButtons(false);
+            openLogStreamFor(task);
+            return;
+          }
           try{
             const r = await fetch('/status?task='+encodeURIComponent(task));
             const j = await r.json();
@@ -211,12 +265,18 @@
         }
 
         // Initially load status/stream for the default active task
-        fetchStatusAndStream(getActiveTask());
+        if(getActiveTask() === 'filter'){
+          setGlobalLogVisible(false);
+        }else{
+          setGlobalLogVisible(true);
+          fetchStatusAndStream(getActiveTask());
+        }
 
         // Periodically poll status for active task to keep button state in sync
         setInterval(async ()=>{
           try{
             const task = getActiveTask();
+            if(task === 'filter') return;
             const r = await fetch('/status?task='+encodeURIComponent(task));
             const j = await r.json();
             setButtons(!!j.running);
@@ -226,7 +286,14 @@
         // fallback if EventSource not available: poll logs into textarea
         if(typeof(EventSource) === 'undefined'){
           setInterval(async ()=>{
-            try{ const task = getActiveTask(); const r = await fetch('/status?task='+encodeURIComponent(task)); const j = await r.json(); ta.value = j.log || ''; ta.scrollTop = ta.scrollHeight;}catch(e){}
+            try{
+              const task = getActiveTask();
+              if(task === 'filter') return;
+              const r = await fetch('/status?task='+encodeURIComponent(task));
+              const j = await r.json();
+              ta.value = j.log || '';
+              ta.scrollTop = ta.scrollHeight;
+            }catch(e){}
           }, 1500);
         }
       })();
